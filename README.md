@@ -1,6 +1,6 @@
 # ELEC391_25W2
 
-### By Colin Yeung, Chathil Rajamanthree, Ethan Soon, Rishi Singh and Rohan Friar
+### By Colin Yeung, Chathil Rajamanthree, Ethan Soon, Rishi Singh, Rohan Friar and Suryansh Madaan
 
 
 ## Course Activities
