@@ -1,6 +1,6 @@
-<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" version="29.3.2">
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" version="29.3.3">
   <diagram name="Overall System" id="53TJ8i4j9RK7FEqcl67l">
-    <mxGraphModel dx="854" dy="405" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="786" dy="463" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1600" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -76,7 +76,10 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="6skAYsaePdY-ON8VV7o0-26" parent="1" style="swimlane;whiteSpace=wrap;html=1;" value="Software" vertex="1">
-          <mxGeometry height="130" width="146" x="173" y="40" as="geometry" />
+          <mxGeometry height="130" width="153" x="173" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="dyn2KDmfqvdzlqy5xT0j-1" parent="6skAYsaePdY-ON8VV7o0-26" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;rounded=0;" value="&lt;ul&gt;&lt;li&gt;PID Algorithm&lt;/li&gt;&lt;li&gt;Actuator Control&lt;/li&gt;&lt;li&gt;Interpreting Sensor Readings&lt;/li&gt;&lt;li&gt;Interpreting Music&lt;/li&gt;&lt;/ul&gt;" vertex="1">
+          <mxGeometry height="30" width="170" x="-17" y="56" as="geometry" />
         </mxCell>
         <mxCell id="6skAYsaePdY-ON8VV7o0-28" edge="1" parent="1" style="endArrow=classic;html=1;rounded=0;" value="">
           <mxGeometry height="50" relative="1" width="50" as="geometry">
