@@ -114,8 +114,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    EncoderValue = __HAL_TIM_GET_COUNTER(&htim2);
-    EncoderDirection = __HAL_TIM_IS_TIM_COUNTING_DOWN(&htim2);
+    EncoderValue = __HAL_TIM_GET_COUNTER(&htim2); // read counter value from tim2
+    EncoderDirection = __HAL_TIM_IS_TIM_COUNTING_DOWN(&htim2); 
     motor_angle = ((float)EncoderValue / 2750.0) * 360.0; // 2750 counts per revolution
     
   }
