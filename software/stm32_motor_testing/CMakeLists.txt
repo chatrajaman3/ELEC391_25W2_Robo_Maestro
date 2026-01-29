@@ -17,6 +17,8 @@ set(CMAKE_C_EXTENSIONS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
+# Explicitly set the build type
+set(CMAKE_BUILD_TYPE "Debug")
 
 # Set the project name
 set(CMAKE_PROJECT_NAME stm32_motor_testing)
@@ -26,6 +28,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
+
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -33,6 +36,11 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+
+target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -O0
+    -g3
+)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
