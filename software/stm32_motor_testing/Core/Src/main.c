@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,13 +42,17 @@
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-uint32_t EncoderValue = 0;
-uint8_t  EncoderDirection;
-float motor_angle; // in deg
+  float motor_angle_curr; // in deg
+  float motor_angle_prev;
+  float motor_angular_vel; // in deg/s
+  uint16_t tick_curr = 0;
+  uint16_t tick_prev = 0;
+  float dt = 1e-6;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,13 +61,41 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// this function redirects printf output to UART3
+int _write(int file, char *ptr, int len)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
 
+float GetMotorAngle(){
+  return ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0) * 360.0; // 2750 counts per revolution
+}
+
+float GetMotorAngVel(){
+    tick_curr = __HAL_TIM_GET_COUNTER(&htim3);
+    if(tick_curr >= tick_prev){
+      dt = (float)(tick_curr - tick_prev) * 1e-6; // tim3 runs at 90MHz w/ 89 prescaler so 1us per tick
+    }
+    else{ // if timer overflowed
+      dt = (float)((65535 - tick_prev) + tick_curr) * 1e-6; 
+    }
+
+    if(motor_angle_curr >= motor_angle_prev){ // if angle overflowed
+      motor_angular_vel = (motor_angle_curr - motor_angle_prev) / dt;
+    }
+    else{
+      motor_angular_vel = ((360.0 - motor_angle_prev) + motor_angle_curr) / dt;
+    }
+    tick_prev = tick_curr;
+}
 /* USER CODE END 0 */
 
 /**
@@ -98,11 +130,15 @@ int main(void)
   MX_TIM1_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   // start the timer in encoder mode
-  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-  __HAL_TIM_SET_COUNTER(&htim2, 0); // Reset TIM2 counter to 0
+ 
+  
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  __HAL_TIM_SET_COUNTER(&htim2, 0);  // start counter at 0
+  HAL_TIM_Base_Start(&htim3);
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 65535/10); // 20% duty cycle 
 
   /* USER CODE END 2 */
@@ -114,10 +150,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    EncoderValue = __HAL_TIM_GET_COUNTER(&htim2); // read counter value from tim2
-    EncoderDirection = __HAL_TIM_IS_TIM_COUNTING_DOWN(&htim2); 
-    motor_angle = ((float)EncoderValue / 2750.0) * 360.0; // 2750 counts per revolution
+    motor_angle_curr = GetMotorAngle();
+    motor_angular_vel = GetMotorAngVel();
+    motor_angle_prev = motor_angle_curr;
     
+
+    printf("%f %f\r\n", motor_angle_curr, motor_angular_vel); // send motor angle and angular velocity over UART3
+    HAL_Delay(50); // 50 ms delay
   }
   /* USER CODE END 3 */
 }
@@ -297,6 +336,51 @@ static void MX_TIM2_Init(void)
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 89;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 65535;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 
 }
 

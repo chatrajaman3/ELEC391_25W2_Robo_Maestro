@@ -41,6 +41,9 @@ target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
     -O0
     -g3
 )
+# enable float support in printf
+set(LINKER_FLAGS "${LINKER_FLAGS}-Wl,-u,_printf_float")
+target_link_libraries(${PROJECT_NAME} ${LINKER_FLAGS})
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
