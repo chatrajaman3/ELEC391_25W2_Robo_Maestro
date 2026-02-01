@@ -22,16 +22,30 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef enum{
+  ZONE_LOW, // when encoder count is 0-500
+  ZONE_MID, // when encoder count is 500-2250
+  ZONE_HIGH // when encoder count is 2250-2750
+} CounterZone;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+// PID control limits
+#define PID_MAX_OUTPUT 65535.0
+#define PID_MIN_OUTPUT -65535.0
+// integral windup limits
+#define INTEGRAL_MAX 100.0
+#define INTEGRAL_MIN -100.0
+// error deadzone
+#define ERROR_THRESHOLD 1.0
+// other paramters
+#define CONTROL_FREQUENCY 100.0 // Hz
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,12 +61,29 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-  float motor_angle_curr; // in deg
-  float motor_angle_prev;
-  float motor_angular_vel; // in deg/s
+  int32_t rotation_count = 0;
+  CounterZone zone_curr = ZONE_MID;
+  CounterZone zone_prev = ZONE_MID;
+  float ang_set = 0;
+  float ang_curr = 0; // in deg
+  float ang_prev = 0;
+  float ang_vel = 0; // in deg/s
+  float dt = 1.0 / CONTROL_FREQUENCY; // in s
   uint16_t tick_curr = 0;
   uint16_t tick_prev = 0;
-  float dt = 1e-6;
+  uint16_t count_curr = 0;
+  uint16_t count_prev = 0;
+  
+  // PID parameters
+  float Kp = 1.0;
+  float Ki = 0.1;
+  float Kd = 0.1;
+  // PID variables
+  float err = 0;
+  float err_prev = 0;
+  float integral = 0;
+  float derivative = 0;
+  float control_signal = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -68,34 +99,115 @@ static void MX_TIM3_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
 // this function redirects printf output to UART3
 int _write(int file, char *ptr, int len)
 {
     HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
     return len;
 }
+void Debug(){
+    printf("err: %.2f, integral %.2f, derivative %.2f, Control Output: %.2f \r\n", err, integral, derivative, control_signal);
+}
+float GetMotorAngle(){ // tim2 counter period is 2750
+  count_curr = __HAL_TIM_GET_COUNTER(&htim2);
 
-float GetMotorAngle(){
-  return ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0) * 360.0; // 2750 counts per revolution
+  zone_prev = zone_curr;
+
+  // get current zone
+  if(count_curr <= 500){
+    zone_curr = ZONE_LOW;
+  }
+  else if(count_curr >= 2250){
+    zone_curr = ZONE_HIGH;
+  }
+  else{
+    zone_curr = ZONE_MID;
+  }
+  count_prev = count_curr;
+
+  // if going from high to low add rotation, if low to high subtract rotation
+  if(zone_prev == ZONE_HIGH && zone_curr == ZONE_LOW){
+    rotation_count++;
+  }
+  else if(zone_prev == ZONE_LOW && zone_curr == ZONE_HIGH){
+    rotation_count--;
+  }
+
+  return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 360.0; // rotations + angle
 }
 
 float GetMotorAngVel(){
-    tick_curr = __HAL_TIM_GET_COUNTER(&htim3);
-    if(tick_curr >= tick_prev){
-      dt = (float)(tick_curr - tick_prev) * 1e-6; // tim3 runs at 90MHz w/ 89 prescaler so 1us per tick
-    }
-    else{ // if timer overflowed
-      dt = (float)((65535 - tick_prev) + tick_curr) * 1e-6; 
-    }
-
-    if(motor_angle_curr >= motor_angle_prev){ // if angle overflowed
-      motor_angular_vel = (motor_angle_curr - motor_angle_prev) / dt;
-    }
-    else{
-      motor_angular_vel = ((360.0 - motor_angle_prev) + motor_angle_curr) / dt;
-    }
-    tick_prev = tick_curr;
+    ang_vel = (ang_curr - ang_prev) / dt;
+    return ang_vel;
 }
+
+float PID(){
+  err = ang_set - ang_curr;
+  integral += err * dt;
+  derivative = (err - err_prev) / dt;
+  err_prev = err;
+
+  // normalize error between -180 and 180 deg
+  while(err > 180.0) err -= 360.0;   
+  while(err < -180.0) err += 360.0;
+
+  // if within treshold, zero error and integral
+  if(fabsf(err) < ERROR_THRESHOLD){
+    err = 0;
+    integral = 0;
+  }
+  // clamp integral
+  if(integral > INTEGRAL_MAX){
+    integral = INTEGRAL_MAX;
+  }
+  if(integral < INTEGRAL_MIN){
+    integral = INTEGRAL_MIN;
+  }
+
+  float P = Kp * err;
+  float I = Ki * integral;
+  float D = Kd * derivative;
+  control_signal = P + I + D;
+
+  // clamp control signal
+  if(control_signal > PID_MAX_OUTPUT){
+    control_signal = PID_MAX_OUTPUT;
+  }
+  if(control_signal < PID_MIN_OUTPUT){
+    control_signal = PID_MIN_OUTPUT;
+  }
+  return control_signal;
+}
+
+void MotorStop(){
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
+}
+
+void MotorCW(uint16_t duty_cycle){
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty_cycle); // set duty cycle
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
+}
+void MotorCCW(uint16_t duty_cycle){
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle); // set duty cycle
+}
+
+void MotorControl(){
+  float control_signal = PID();
+  if(fabsf(control_signal) < 100.0){
+    MotorStop();
+  }
+  else if (control_signal > 0){
+    MotorCW((uint16_t)control_signal);
+  }
+  else{
+    MotorCCW((uint16_t)(-control_signal));
+  }
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -134,13 +246,19 @@ int main(void)
   /* USER CODE BEGIN 2 */
   // start the timer in encoder mode
  
-  
+  // start tim1 PWM channels
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
+  // initialize both PWM channels to 0% duty cycle
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+  // start tim2 in encoder mode
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim2, 0);  // start counter at 0
-  HAL_TIM_Base_Start(&htim3);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 65535/10); // 20% duty cycle 
 
+  HAL_TIM_Base_Start_IT(&htim3); // enable ISR for tim3
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -150,13 +268,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    motor_angle_curr = GetMotorAngle();
-    motor_angular_vel = GetMotorAngVel();
-    motor_angle_prev = motor_angle_curr;
-    
-
-    printf("%f %f\r\n", motor_angle_curr, motor_angular_vel); // send motor angle and angular velocity over UART3
-    HAL_Delay(50); // 50 ms delay
   }
   /* USER CODE END 3 */
 }
@@ -272,6 +383,10 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
   sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
   sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
@@ -358,9 +473,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 89;
+  htim3.Init.Prescaler = 8999;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 99;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -457,7 +572,20 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+/* USER CODE BEGIN 4 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM3)  // Make sure it’s TIM3
+    {
+        /* USER CODE BEGIN TIM3_ISR */
+        ang_curr = GetMotorAngle();
+        ang_vel = GetMotorAngVel();
+        ang_prev = ang_curr;
+        MotorControl();
+        Debug();
+        /* USER CODE END TIM3_ISR */
+    }
+}
 /* USER CODE END 4 */
 
 /**
