@@ -31,7 +31,7 @@ typedef enum{
   ZONE_LOW, // when encoder count is 0-500
   ZONE_MID, // when encoder count is 500-2250
   ZONE_HIGH // when encoder count is 2250-2750
-} CounterZone;
+} CounterZone; // for rotation tracking
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -44,8 +44,19 @@ typedef enum{
 #define INTEGRAL_MIN -100.0
 // error deadzone
 #define ERROR_THRESHOLD 1.0
-// other paramters
-#define CONTROL_FREQUENCY 100.0 // Hz
+
+/* control loop timing */
+/*
+Hz ftimer = fclk/(PSC+1)
+dt = (ARR+1)/ftimer
+CF = 1/dt 
+tau = 5*dt (for now)
+beta = exp(-dt/tau)
+*/
+#define DT 0.01 
+#define CONTROL_FREQUENCY 100.0 
+#define TAU 0.05
+#define BETA 0.818730753078 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,23 +72,25 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+  // Logic and Reading variables
   int32_t rotation_count = 0;
   CounterZone zone_curr = ZONE_MID;
   CounterZone zone_prev = ZONE_MID;
   float ang_set = 0;
-  float ang_curr = 0; // in deg
+  float ang_curr = 0; 
   float ang_prev = 0;
-  float ang_vel = 0; // in deg/s
-  float dt = 1.0 / CONTROL_FREQUENCY; // in s
+  float ang_vel = 0; 
   uint16_t tick_curr = 0;
   uint16_t tick_prev = 0;
   uint16_t count_curr = 0;
   uint16_t count_prev = 0;
-  
+
   // PID parameters
   float Kp = 1.0;
   float Ki = 0.1;
   float Kd = 0.1;
+
   // PID variables
   float err = 0;
   float err_prev = 0;
@@ -94,6 +107,17 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
+
+int _write(int file, char *ptr, int len);
+void Debug(void);
+float GetMotorAngle(void);
+float GetMotorAngVel(void);
+void IRRFilter(float* sig);
+float PID(void);
+void MotorStop(void);
+void MotorCW(uint16_t duty_cycle);
+void MotorCCW(uint16_t duty_cycle);
+void MotorControl(void);
 
 /* USER CODE END PFP */
 
@@ -138,14 +162,21 @@ float GetMotorAngle(){ // tim2 counter period is 2750
 }
 
 float GetMotorAngVel(){
-    ang_vel = (ang_curr - ang_prev) / dt;
+    ang_vel = (ang_curr - ang_prev) / DT;
     return ang_vel;
+}
+
+void IRRFilter(float* sig){
+  static float sigfilt_prev;
+  *sig = BETA * sigfilt_prev + (1 - BETA) * (*sig);
+  sigfilt_prev = *sig;
 }
 
 float PID(){
   err = ang_set - ang_curr;
-  integral += err * dt;
-  derivative = (err - err_prev) / dt;
+  integral += err * DT;
+  derivative = (err - err_prev) / DT;
+  IRRFilter(&derivative);
   err_prev = err;
 
   // normalize error between -180 and 180 deg
@@ -249,10 +280,10 @@ int main(void)
   // start tim1 PWM channels
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-
   // initialize both PWM channels to 0% duty cycle
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+
   // start tim2 in encoder mode
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim2, 0);  // start counter at 0
