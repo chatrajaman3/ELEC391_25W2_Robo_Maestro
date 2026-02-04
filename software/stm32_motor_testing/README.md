@@ -1,17 +1,18 @@
-Testing program for the motor and encoder:
+# Testing program for the motor and encoder:
 
-Tasks:
+## Tasks:
 - currently reads encoder using timer 2 and converts to the angle of output shaft
 - uses timer 3 to get dt for the control loop
 - calculates angular velocity using dt as well as angle data
 - need to implement a filter 
 - need to find a way to set an origin point
 
-Simulation & Testing:
+## Simulation & Testing:
 - currently outputs angle position and velocity through UART2 -> ST-Link -> COM3
 - able to read COM3 through Putty and can plot values over time using MATLAB
 
-Wiring:
+## Wiring:
+### motor wires:
 red -> CW signal
 black -> microcontroller ground
 yellow -> PA1
@@ -19,3 +20,12 @@ green -> PA0
 blue -> microcontroller 5V
 white -> CCW signal
 
+### pwm signal:
+D7 (PA8) -> IN1 (Driver) 
+D8 (PA9) -> IN2 (Driver)
+
+### motor driver:
+VM -> 12V powersupply
+GND -> ground powersupply
+MOTOR1 -> CW motor signal
+MOTO2 -> CCW motor signal

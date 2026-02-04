@@ -23,6 +23,8 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,13 +34,19 @@ typedef enum{
   ZONE_MID, // when encoder count is 500-2250
   ZONE_HIGH // when encoder count is 2250-2750
 } CounterZone; // for rotation tracking
+
+typedef enum{
+  MODE_MENU,
+  MODE_SEND,
+  MODE_RECEIVE
+} UARTMode;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // PID control limits
-#define PID_MAX_OUTPUT 65535.0
-#define PID_MIN_OUTPUT -65535.0
+#define PID_ABS_MAX_OUTPUT 65535.0
+#define PID_ABS_MIN_OUTPUT 5000.0
 // integral windup limits
 #define INTEGRAL_MAX 100.0
 #define INTEGRAL_MIN -100.0
@@ -57,6 +65,9 @@ beta = exp(-dt/tau)
 #define CONTROL_FREQUENCY 100.0 
 #define TAU 0.05
 #define BETA 0.818730753078 
+
+// other defines
+#define RX_BUFFER_SIZE 32
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -87,9 +98,9 @@ UART_HandleTypeDef huart2;
   uint16_t count_prev = 0;
 
   // PID parameters
-  float Kp = 1.0;
-  float Ki = 0.1;
-  float Kd = 0.1;
+  float Kp = 500.0;
+  float Ki = 0.0;
+  float Kd = 0.0;
 
   // PID variables
   float err = 0;
@@ -97,6 +108,14 @@ UART_HandleTypeDef huart2;
   float integral = 0;
   float derivative = 0;
   float control_signal = 0;
+
+  // other variables
+  uint8_t rx_char;
+  char rx_buffer[RX_BUFFER_SIZE];
+  uint8_t rx_index = 0;
+  volatile uint8_t command_ready = 0;
+  UARTMode current_mode = MODE_MENU;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -109,7 +128,7 @@ static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 int _write(int file, char *ptr, int len);
-void Debug(void);
+void PrintValues(void);
 float GetMotorAngle(void);
 float GetMotorAngVel(void);
 void IRRFilter(float* sig);
@@ -118,6 +137,7 @@ void MotorStop(void);
 void MotorCW(uint16_t duty_cycle);
 void MotorCCW(uint16_t duty_cycle);
 void MotorControl(void);
+void ProcessCommand(char *cmd);
 
 /* USER CODE END PFP */
 
@@ -130,8 +150,41 @@ int _write(int file, char *ptr, int len)
     HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
     return len;
 }
-void Debug(){
-    printf("err: %.2f, integral %.2f, derivative %.2f, Control Output: %.2f \r\n", err, integral, derivative, control_signal);
+
+void ProcessCommand(char *cmd)
+{
+    if(current_mode == MODE_RECEIVE){
+      if(strncmp(cmd, "s", 1) ==0){
+        current_mode = MODE_MENU;
+        printf("Switched to MENU mode\r\n");
+      }
+    }
+    else if(strncmp(cmd, "SET ", 4) == 0)
+    {
+        float val = atof(&cmd[4]);
+        ang_set = val;
+        printf("New set angle: %.2f\r\n", ang_set);
+    }
+
+    else if(strncmp(cmd, "MODE MENU", 9) == 0)
+    {
+        current_mode = MODE_MENU;
+        printf("Switched to MENU mode\r\n");
+    }
+
+    else if(strncmp(cmd, "MODE RECEIVE", 12) == 0)
+    {
+        current_mode = MODE_RECEIVE;
+        printf("Switched to RECEIVE mode\r\n");
+    }
+    else
+    {
+        printf("Unknown command\r\n");
+    }
+}
+
+void PrintValues(){
+    printf("ang_curr: %.2f, err: %.2f, integral %.2f, derivative %.2f, Control Output: %.2f \r\n", ang_curr, err, integral, derivative, control_signal);
 }
 float GetMotorAngle(){ // tim2 counter period is 2750
   count_curr = __HAL_TIM_GET_COUNTER(&htim2);
@@ -174,20 +227,19 @@ void IRRFilter(float* sig){
 
 float PID(){
   err = ang_set - ang_curr;
-  integral += err * DT;
-  derivative = (err - err_prev) / DT;
-  IRRFilter(&derivative);
-  err_prev = err;
-
-  // normalize error between -180 and 180 deg
-  while(err > 180.0) err -= 360.0;   
-  while(err < -180.0) err += 360.0;
-
   // if within treshold, zero error and integral
   if(fabsf(err) < ERROR_THRESHOLD){
     err = 0;
     integral = 0;
   }
+  integral += err * DT;
+  derivative = (err - err_prev) / DT;
+  IRRFilter(&derivative);
+  err_prev = err;
+
+
+
+
   // clamp integral
   if(integral > INTEGRAL_MAX){
     integral = INTEGRAL_MAX;
@@ -202,11 +254,17 @@ float PID(){
   control_signal = P + I + D;
 
   // clamp control signal
-  if(control_signal > PID_MAX_OUTPUT){
-    control_signal = PID_MAX_OUTPUT;
+  if(control_signal > PID_ABS_MAX_OUTPUT){
+    control_signal = PID_ABS_MAX_OUTPUT;
   }
-  if(control_signal < PID_MIN_OUTPUT){
-    control_signal = PID_MIN_OUTPUT;
+  if(control_signal < -PID_ABS_MAX_OUTPUT){
+    control_signal = -PID_ABS_MAX_OUTPUT;
+  }
+  if(control_signal > 0 && control_signal < PID_ABS_MIN_OUTPUT){
+    control_signal = PID_ABS_MIN_OUTPUT;
+  }
+  if(control_signal < 0 && control_signal > -PID_ABS_MIN_OUTPUT){
+    control_signal = -PID_ABS_MIN_OUTPUT;
   }
   return control_signal;
 }
@@ -226,7 +284,7 @@ void MotorCCW(uint16_t duty_cycle){
 }
 
 void MotorControl(){
-  float control_signal = PID();
+  control_signal = PID();
   if(fabsf(control_signal) < 100.0){
     MotorStop();
   }
@@ -289,6 +347,7 @@ int main(void)
   __HAL_TIM_SET_COUNTER(&htim2, 0);  // start counter at 0
 
   HAL_TIM_Base_Start_IT(&htim3); // enable ISR for tim3
+  HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
   /* USER CODE END 2 */
 
@@ -296,6 +355,15 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    if(command_ready){
+      ProcessCommand(rx_buffer);
+      command_ready = 0;
+    }
+    if(current_mode == MODE_RECEIVE){
+      PrintValues();
+      HAL_Delay(200);
+
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -380,7 +448,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 8999;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -613,10 +681,44 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         ang_vel = GetMotorAngVel();
         ang_prev = ang_curr;
         MotorControl();
-        Debug();
         /* USER CODE END TIM3_ISR */
     }
 }
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        HAL_UART_Transmit(&huart2, &rx_char, 1, HAL_MAX_DELAY);
+        // Detect end of command
+        if (rx_char == '\r' || rx_char == '\n')
+        {
+            if (rx_index > 0)   // Ignore empty ENTER presses
+            {
+                rx_buffer[rx_index] = '\0';   // Null terminate string
+                command_ready = 1;
+                rx_index = 0;
+            }
+        }
+        else
+        {
+            // Store received character if buffer not full
+            if (rx_index < RX_BUFFER_SIZE - 1)
+            {
+                rx_buffer[rx_index++] = rx_char;
+            }
+            else
+            {
+                // Buffer overflow protection
+                rx_index = 0;
+            }
+        }
+
+        // Re-arm UART interrupt (VERY IMPORTANT)
+        HAL_UART_Receive_IT(&huart2, &rx_char, 1);
+    }
+}
+    
+
 /* USER CODE END 4 */
 
 /**
