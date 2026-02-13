@@ -37,8 +37,8 @@ typedef enum{
 
 typedef enum{
   MODE_MENU,
-  MODE_SEND,
-  MODE_RECEIVE
+  MODE_RECEIVE,
+  MODE_READ_VELOCITY
 } UARTMode;
 /* USER CODE END PTD */
 
@@ -153,31 +153,29 @@ int _write(int file, char *ptr, int len)
 
 void ProcessCommand(char *cmd)
 {
-    if(current_mode == MODE_RECEIVE){
-      if(strncmp(cmd, "s", 1) ==0){
+    if(current_mode != MODE_MENU){ // enter m to return to menu
+      if(strncmp(cmd, "m", 1) ==0){
         current_mode = MODE_MENU;
         printf("Switched to MENU mode\r\n");
       }
     }
-    else if(strncmp(cmd, "SET ", 4) == 0)
+    else if(strncmp(cmd, "set ", 4) == 0) // enter set (angle) to change the setpoint angle
     {
         float val = atof(&cmd[4]);
         ang_set = val;
         printf("New set angle: %.2f\r\n", ang_set);
     }
-
-    else if(strncmp(cmd, "MODE MENU", 9) == 0)
-    {
-        current_mode = MODE_MENU;
-        printf("Switched to MENU mode\r\n");
-    }
-
-    else if(strncmp(cmd, "MODE RECEIVE", 12) == 0)
+    else if(strncmp(cmd, "r", 1) == 0) // enter r to receive info in the from PrintValues()
     {
         current_mode = MODE_RECEIVE;
         printf("Switched to RECEIVE mode\r\n");
     }
-    else
+    else if(strncmp(cmd, "v", 1) == 0) // enter v to read angular velocity
+    {
+        current_mode = MODE_READ_VELOCITY;
+        printf("Switched to READ VELOCITY mode\r\n");
+    }
+    else // if command not recognized, print error message
     {
         printf("Unknown command\r\n");
     }
@@ -213,12 +211,6 @@ float GetMotorAngle(){ // tim2 counter period is 2750
 
   return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 360.0; // rotations + angle
 }
-
-float GetMotorAngVel(){
-    ang_vel = (ang_curr - ang_prev) / DT;
-    return ang_vel;
-}
-
 void IRRFilter(float* sig){
   static float sigfilt_prev;
   *sig = BETA * sigfilt_prev + (1 - BETA) * (*sig);
@@ -361,8 +353,9 @@ int main(void)
     }
     if(current_mode == MODE_RECEIVE){
       PrintValues();
-      HAL_Delay(200);
-
+    }
+    if(current_mode == MODE_READ_VELOCITY){
+      printf("ang_vel: %.2f\r\n", ang_vel);
     }
     /* USER CODE END WHILE */
 
@@ -678,8 +671,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     {
         /* USER CODE BEGIN TIM3_ISR */
         ang_curr = GetMotorAngle();
-        ang_vel = GetMotorAngVel();
-        ang_prev = ang_curr;
         MotorControl();
         /* USER CODE END TIM3_ISR */
     }
