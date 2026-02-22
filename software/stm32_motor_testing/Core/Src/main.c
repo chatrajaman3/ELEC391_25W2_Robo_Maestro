@@ -38,20 +38,21 @@ typedef enum{
 typedef enum{
   MODE_MENU,
   MODE_RECEIVE,
-  MODE_READ_VELOCITY
+  MODE_READ_VELOCITY,
+  MODE_STOP
 } UARTMode;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // PID control limits
+#define PID_ABS_MIN_OUTPUT 30000.0
 #define PID_ABS_MAX_OUTPUT 65535.0
-#define PID_ABS_MIN_OUTPUT 5000.0
 // integral windup limits
-#define INTEGRAL_MAX 100.0
-#define INTEGRAL_MIN -100.0
+#define INTEGRAL_MAX 50.0
+#define INTEGRAL_MIN -50.0
 // error deadzone
-#define ERROR_THRESHOLD 1.0
+#define ERROR_THRESHOLD 0.05 // rad
 
 /* control loop timing */
 /*
@@ -59,12 +60,13 @@ Hz ftimer = fclk/(PSC+1)
 dt = (ARR+1)/ftimer
 CF = 1/dt 
 tau = 5*dt (for now)
-beta = exp(-dt/tau)
+BETAD = exp(-dt/tau)
 */
 #define DT 0.01 
 #define CONTROL_FREQUENCY 100.0 
 #define TAU 0.05
-#define BETA 0.818730753078 
+#define BETAD 0.6065
+#define BETAF 0.2
 
 // other defines
 #define RX_BUFFER_SIZE 32
@@ -98,9 +100,9 @@ UART_HandleTypeDef huart2;
   uint16_t count_prev = 0;
 
   // PID parameters
-  float Kp = 500.0;
-  float Ki = 0.0;
-  float Kd = 0.0;
+  float Kp = 350000.0;
+  float Ki = 1000.0;
+  float Kd = 15000.0;
 
   // PID variables
   float err = 0;
@@ -108,6 +110,9 @@ UART_HandleTypeDef huart2;
   float integral = 0;
   float derivative = 0;
   float control_signal = 0;
+  float P = 0;
+  float I = 0;
+  float D = 0;
 
   // other variables
   uint8_t rx_char;
@@ -131,7 +136,8 @@ int _write(int file, char *ptr, int len);
 void PrintValues(void);
 float GetMotorAngle(void);
 float GetMotorAngVel(void);
-void IRRFilter(float* sig);
+void IRRFilderD(float* sigD);
+void IRRFilderF(float* sigF);
 float PID(void);
 void MotorStop(void);
 void MotorCW(uint16_t duty_cycle);
@@ -162,7 +168,7 @@ void ProcessCommand(char *cmd)
     else if(strncmp(cmd, "set ", 4) == 0) // enter set (angle) to change the setpoint angle
     {
         float val = atof(&cmd[4]);
-        ang_set = val;
+        ang_set = val * M_PI / 180.0; // convert to radians
         printf("New set angle: %.2f\r\n", ang_set);
     }
     else if(strncmp(cmd, "r", 1) == 0) // enter r to receive info in the from PrintValues()
@@ -175,6 +181,11 @@ void ProcessCommand(char *cmd)
         current_mode = MODE_READ_VELOCITY;
         printf("Switched to READ VELOCITY mode\r\n");
     }
+    else if(strncmp(cmd, "s", 1) == 0) // enter s to stop motor
+    {
+        current_mode = MODE_STOP;
+        printf("Switched to STOP mode\r\n");
+    }
     else // if command not recognized, print error message
     {
         printf("Unknown command\r\n");
@@ -182,7 +193,7 @@ void ProcessCommand(char *cmd)
 }
 
 void PrintValues(){
-    printf("ang_curr: %.2f, err: %.2f, integral %.2f, derivative %.2f, Control Output: %.2f \r\n", ang_curr, err, integral, derivative, control_signal);
+    printf(" err: %.2f, P %.2f, I %.2f, D %.2f, Control Output: %.2f \r\n", err, P, I, D, control_signal);
 }
 float GetMotorAngle(){ // tim2 counter period is 2750
   count_curr = __HAL_TIM_GET_COUNTER(&htim2);
@@ -209,7 +220,7 @@ float GetMotorAngle(){ // tim2 counter period is 2750
     rotation_count--;
   }
 
-  return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 360.0; // rotations + angle
+  return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 2.0 * M_PI; // rotations + angle
 }
 
 float GetMotorAngVel(){
@@ -217,10 +228,16 @@ float GetMotorAngVel(){
     return ang_vel;
 }
 
-void IRRFilter(float* sig){
+void IRRFilderD(float* sigD){
   static float sigfilt_prev;
-  *sig = BETA * sigfilt_prev + (1 - BETA) * (*sig);
-  sigfilt_prev = *sig;
+  *sigD = BETAD * sigfilt_prev + (1 - BETAD) * (*sigD);
+  sigfilt_prev = *sigD;
+}
+
+void IRRFilderF(float* sigF){
+  static float sigfilt_prev;
+  *sigF = BETAF * sigfilt_prev + (1 - BETAF) * (*sigF);
+  sigfilt_prev = *sigF;
 }
 
 float PID(){
@@ -231,12 +248,10 @@ float PID(){
     integral = 0;
   }
   integral += err * DT;
-  derivative = (err - err_prev) / DT;
-  IRRFilter(&derivative);
+  derivative = (ang_curr - ang_prev) / DT;
+  IRRFilderD(&derivative);
   err_prev = err;
-
-
-
+  ang_prev = ang_curr;
 
   // clamp integral
   if(integral > INTEGRAL_MAX){
@@ -246,9 +261,9 @@ float PID(){
     integral = INTEGRAL_MIN;
   }
 
-  float P = Kp * err;
-  float I = Ki * integral;
-  float D = Kd * derivative;
+  P = Kp * err;
+  I = Ki * integral;
+  D = -Kd * derivative;
   control_signal = P + I + D;
 
   // clamp control signal
@@ -257,12 +272,6 @@ float PID(){
   }
   if(control_signal < -PID_ABS_MAX_OUTPUT){
     control_signal = -PID_ABS_MAX_OUTPUT;
-  }
-  if(control_signal > 0 && control_signal < PID_ABS_MIN_OUTPUT){
-    control_signal = PID_ABS_MIN_OUTPUT;
-  }
-  if(control_signal < 0 && control_signal > -PID_ABS_MIN_OUTPUT){
-    control_signal = -PID_ABS_MIN_OUTPUT;
   }
   return control_signal;
 }
@@ -282,8 +291,8 @@ void MotorCCW(uint16_t duty_cycle){
 }
 
 void MotorControl(){
-  control_signal = PID();
-  if(fabsf(control_signal) < 100.0){
+  control_signal = PID(); // scale control signal to timer period
+  if(fabsf(control_signal) < PID_ABS_MIN_OUTPUT){
     MotorStop();
   }
   else if (control_signal > 0){
@@ -361,9 +370,14 @@ int main(void)
       PrintValues();
     }
     if(current_mode == MODE_READ_VELOCITY){
-      printf("ang_vel: %.2f\r\n", ang_vel);
+      printf("ang_curr: %.2f\r\n", ang_vel);
     }
-    printf("ang_vel: %.2f %.2f\r\n", ang_vel, ang_vel);
+    if(current_mode == MODE_STOP){
+      MotorStop();
+      ang_set = ang_curr; // set setpoint to current angle so that when we exit stop mode it doesn't try to correct for error accumulated during stop
+      MotorStop();
+    }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -448,7 +462,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 8999;
+  htim1.Init.Period = 65535;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -674,13 +688,13 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM3)  // Make sure it’s TIM3
+    if (htim->Instance == TIM3)  
     {
         /* USER CODE BEGIN TIM3_ISR */
         ang_curr = GetMotorAngle();
-        ang_vel = GetMotorAngVel();
-        ang_prev = ang_curr;
-        //MotorControl();
+        // IRRFilderF(&ang_curr);
+        MotorControl();
+
         /* USER CODE END TIM3_ISR */
     }
 }
