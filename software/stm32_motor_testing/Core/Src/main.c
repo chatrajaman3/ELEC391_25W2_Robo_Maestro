@@ -171,6 +171,12 @@ void ProcessCommand(char *cmd)
         ang_set = val * M_PI / 180.0; // convert to radians
         printf("New set angle: %.2f\r\n", ang_set);
     }
+    else if(strncmp(cmd, "set ", 4) == 0) // enter set (angle) to change the setpoint angle
+    {
+        float val = atof(&cmd[4]);
+        ang_set = val * M_PI / 180.0; // convert to radians
+        printf("New set angle: %.2f\r\n", ang_set);
+    }
     else if(strncmp(cmd, "r", 1) == 0) // enter r to receive info in the from PrintValues()
     {
         current_mode = MODE_RECEIVE;
@@ -303,6 +309,28 @@ void MotorControl(){
   }
 }
 
+void AngInit(void)
+{
+  MotorCW(33000);   // Spin slowly
+
+  while (1)
+  {
+    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
+      HAL_Delay(20);  // debounce
+
+      if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
+        MotorStop();
+        __HAL_TIM_SET_COUNTER(&htim2, 0);  // reset encoder
+        ang_curr = 0;
+
+        HAL_TIM_Base_Start_IT(&htim3);     // start PID loop
+
+        break;  // exit homing loop
+      }
+    }
+  }
+}
+
 
 /* USER CODE END 0 */
 
@@ -345,17 +373,14 @@ int main(void)
   // start tim1 PWM channels
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-  // initialize both PWM channels to 0% duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+
+  MotorStop();
 
   // start tim2 in encoder mode
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-  __HAL_TIM_SET_COUNTER(&htim2, 0);  // start counter at 0
-
-  HAL_TIM_Base_Start_IT(&htim3); // enable ISR for tim3
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
+  AngInit();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -666,11 +691,11 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  /*Configure GPIO pin : PC13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
