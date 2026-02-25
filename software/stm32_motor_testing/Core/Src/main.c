@@ -49,10 +49,10 @@ typedef enum{
 #define PID_ABS_MIN_OUTPUT 30000.0
 #define PID_ABS_MAX_OUTPUT 65535.0
 // integral windup limits
-#define INTEGRAL_MAX 50.0
-#define INTEGRAL_MIN -50.0
+#define INTEGRAL_MAX 1
+#define INTEGRAL_MIN -1
 // error deadzone
-#define ERROR_THRESHOLD 0.05 // rad
+#define ERROR_THRESHOLD 0.02 // rad
 
 /* control loop timing */
 /*
@@ -101,7 +101,7 @@ UART_HandleTypeDef huart2;
 
   // PID parameters
   float Kp = 350000.0;
-  float Ki = 1000.0;
+  float Ki = 20000.0;
   float Kd = 15000.0;
 
   // PID variables
@@ -199,7 +199,7 @@ void ProcessCommand(char *cmd)
 }
 
 void PrintValues(){
-    printf(" err: %.2f, P %.2f, I %.2f, D %.2f, Control Output: %.2f \r\n", err, P, I, D, control_signal);
+    printf(" ang_curr: %.2f, err: %.2f, P %.2f, I %.2f, D %.2f, Control Output: %.2f \r\n", ang_curr, err, P, I, D, control_signal);
 }
 float GetMotorAngle(){ // tim2 counter period is 2750
   count_curr = __HAL_TIM_GET_COUNTER(&htim2);
@@ -348,7 +348,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+   HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -381,6 +381,19 @@ int main(void)
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
   AngInit();
+    
+    
+    // HAL_Delay(5000);
+    // ang_set = 90.0 * M_PI / 180.0; 
+    // HAL_Delay(5000);
+    // ang_set = 180.0 * M_PI / 180.0; 
+    // HAL_Delay(5000);
+    // ang_set = 270.0 * M_PI / 180.0; 
+    // HAL_Delay(5000);
+    // ang_set = 360.0 * M_PI / 180.0; 
+    // HAL_Delay(5000);
+    // ang_set = 0.0;
+    
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -719,6 +732,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         ang_curr = GetMotorAngle();
         // IRRFilderF(&ang_curr);
         MotorControl();
+        //printf("%.2f\r\n", ang_curr*180.0/M_PI);
 
         /* USER CODE END TIM3_ISR */
     }
