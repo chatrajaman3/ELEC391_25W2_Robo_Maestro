@@ -44,6 +44,17 @@ typedef enum{
   MODE_ACTUATE,
   MODE_STOP
 } UARTMode;
+
+typedef struct {
+    GPIO_TypeDef *port;
+    uint16_t pin;
+
+    uint8_t last_reading;
+    uint8_t stable_state;
+
+    uint32_t last_debounce_time;
+    uint32_t debounce_delay;
+} Button_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -87,7 +98,7 @@ UART_HandleTypeDef huart2;
   volatile uint8_t command_ready = 0;
   UARTMode current_mode = MODE_MENU;
   uint8_t actuation_state = 0;
-  uint8_t blue_button_prev = 1; 
+  Button_t blue_button;
 
 /* USER CODE END PV */
 
@@ -117,6 +128,17 @@ void ProcessCommand(char *cmd);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void Button_Init(Button_t *btn, GPIO_TypeDef *port, uint16_t pin, uint32_t debounce_delay)
+{
+    btn->port = port;
+    btn->pin = pin;
+    btn->debounce_delay = debounce_delay;
+
+    btn->last_reading = HAL_GPIO_ReadPin(port, pin);
+    btn->stable_state = btn->last_reading;
+    btn->last_debounce_time = 0;
+}
 
 // this function redirects printf output to UART3
 int _write(int file, char *ptr, int len)
@@ -212,6 +234,32 @@ void MotorCCW(uint16_t duty_cycle){
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle); // set duty cycle
 }
+uint8_t Button_Update(Button_t *btn)
+{
+	uint8_t reading = HAL_GPIO_ReadPin(btn->port, btn->pin);
+
+	if(reading != btn->last_reading)
+	{
+		btn->last_debounce_time = HAL_GetTick();
+	}
+
+	if((HAL_GetTick() - btn->last_debounce_time) > btn->debounce_delay)
+	{
+		if(reading != btn->stable_state)
+		{
+			btn->stable_state = reading;
+
+			if(btn->stable_state == GPIO_PIN_RESET)
+			{
+				btn->last_reading = reading;
+				return 1;
+			}
+		}
+	}
+
+	btn->last_reading = reading;
+	return 0;
+}
 
 
 /* USER CODE END 0 */
@@ -263,6 +311,8 @@ int main(void)
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // set PB12 low
+
+  Button_Init(&blue_button, GPIOC, GPIO_PIN_13, 20); // initialize blue button with 20ms debounce delay
     
   /* USER CODE END 2 */
 
@@ -286,14 +336,11 @@ int main(void)
       current_mode = MODE_MENU;
     }
     if(current_mode == MODE_ACTUATE){
-      if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){ // when button is pressed 
-        HAL_Delay(20);  // debounce
-        if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET){ // check again to confirm button press
-          actuation_state = !actuation_state; // toggle state
-          printf("Actuation state: %d\r\n", actuation_state);
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, actuation_state); // toggle PB10
-          while(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET); // wait for button release
-        }
+      if(Button_Update(&blue_button)){ // if blue button is pressed
+        actuation_state = !actuation_state; // toggle state
+        printf("Actuation state: %d\r\n", actuation_state);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, actuation_state); // toggle PB10
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, actuation_state); // toggle PB4
       }
     }
     if(current_mode == MODE_STOP){
@@ -589,7 +636,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -604,8 +651,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  /*Configure GPIO pins : PB10 PB4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_4;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
