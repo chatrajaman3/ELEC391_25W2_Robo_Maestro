@@ -337,10 +337,28 @@ int main(void)
     }
     if(current_mode == MODE_ACTUATE){
       if(Button_Update(&blue_button)){ // if blue button is pressed
-        actuation_state = !actuation_state; // toggle state
+        actuation_state++;
+        if(actuation_state == 4){
+          actuation_state = 0;
+        }
         printf("Actuation state: %d\r\n", actuation_state);
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, actuation_state); // toggle PB10
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, actuation_state); // toggle PB4
+        if(actuation_state == 0){
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 0); 
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0); 
+        }
+        if(actuation_state == 1){
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 1); 
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0); 
+        }
+        if(actuation_state == 2){
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 0); 
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 1); 
+        }
+        if(actuation_state == 3){
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 1); 
+          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 1); 
+        }
+        
       }
     }
     if(current_mode == MODE_STOP){
