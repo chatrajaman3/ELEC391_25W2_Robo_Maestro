@@ -140,7 +140,7 @@ void Button_Init(Button_t *btn, GPIO_TypeDef *port, uint16_t pin, uint32_t debou
     btn->last_debounce_time = 0;
 }
 
-// this function redirects printf output to UART3
+// this function redirects printf output to UART2
 int _write(int file, char *ptr, int len)
 {
     HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
