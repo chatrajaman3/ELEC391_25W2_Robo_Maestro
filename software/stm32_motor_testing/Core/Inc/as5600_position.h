@@ -6,7 +6,7 @@
  *            STM32F446RE  – internal Flash used for position storage
  *
  * Storage strategy:
- *   Position is saved to Flash only when the user explicitly presses
+ *   Position is saved to Flash only when the user presses
  *   the save button. This keeps write count very low (well within the
  *   10,000 cycle Flash endurance limit).
  *
@@ -111,7 +111,10 @@ HAL_StatusTypeDef AS5600_ResetPosition(void);
  */
 bool AS5600_IsMagnetDetected(void);
 
+void AS5600_PrintMagnetStatus(void);
+
 /* External I²C handle (defined by CubeMX in main.c) */
 extern I2C_HandleTypeDef AS5600_I2C_HANDLE;
 
 #endif /* AS5600_POSITION_H */
+

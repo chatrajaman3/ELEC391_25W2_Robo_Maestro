@@ -3,9 +3,31 @@
  * @brief   Multi-turn absolute position tracker – AS5600 + STM32 Flash
  *          See as5600_position.h for full documentation.
  */
+/** 
+AS5600 Pinout SOIC-8 Pin-Out
+─────────────────────────────────────────
+        ┌───────────┐
+ VDD5V ─┤ 1       8 ├── DIR
+ VDD3V3─┤ 2       7 ├── SCL
+  OUT  ─┤ 3       6 ├── SDA
+  GND  ─┤ 4       5 ├── PGO
+        └───────────┘
+
+Pin Descriptions
+─────────────────────────────────────────
+ 1  VDD5V  5V supply    ─┐ tie together,
+ 2  VDD3V3 3.3V supply  ─┘ connect to 3.3V
+ 3  OUT    Analog/PWM output (unused if using I2C)
+ 4  GND    Ground
+ 5  PGO    OTP programming (leave unconnected)
+ 6  SDA    I2C data
+ 7  SCL    I2C clock
+ 8  DIR    Direction select (GND = CW↑, 3.3V = CCW↑)
+*/
 
 #include "as5600_position.h"
 #include <string.h>
+#include <stdio.h>
 
 /* ── AS5600 registers ───────────────────────────────────────────────────── */
 #define AS5600_REG_STATUS       0x0B
@@ -261,4 +283,27 @@ bool AS5600_IsMagnetDetected(void)
     return ((status & AS5600_STATUS_MD) != 0) &&
            ((status & AS5600_STATUS_MH) == 0) &&
            ((status & AS5600_STATUS_ML) == 0);
+}
+
+void AS5600_PrintMagnetStatus(void)
+{
+    uint8_t status = 0;
+    if (as5600_read_status(&status) != HAL_OK)
+    {
+        printf("AS5600: I2C error\r\n");
+        return;
+    }
+
+    uint8_t md = (status & AS5600_STATUS_MD) != 0;  /* magnet detected */
+    uint8_t ml = (status & AS5600_STATUS_ML) != 0;  /* too weak        */
+    uint8_t mh = (status & AS5600_STATUS_MH) != 0;  /* too strong      */
+
+    if (!md)
+        printf("AS5600: NO MAGNET DETECTED\r\n");
+    else if (ml)
+        printf("AS5600: TOO WEAK  - move magnet closer\r\n");
+    else if (mh)
+        printf("AS5600: TOO STRONG - move magnet further away\r\n");
+    else
+        printf("AS5600: GOOD\r\n");
 }

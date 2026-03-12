@@ -1,31 +1,34 @@
 # Testing program for the motor and encoder:
 
-## Tasks:
-- currently reads encoder using timer 2 and converts to the angle of output shaft
-- uses timer 3 to get dt for the control loop
-- calculates angular velocity using dt as well as angle data
-- need to implement a filter 
-- need to find a way to set an origin point
-
-## Simulation & Testing:
-- currently outputs angle position and velocity through UART2 -> ST-Link -> COM3
-- able to read COM3 through Putty and can plot values over time using MATLAB
 
 ## Wiring:
-### motor wires:
-red -> CW signal
-black -> microcontroller ground
-yellow -> PA1
-green -> PA0
-blue -> microcontroller 5V
-white -> CCW signal
+
+AS5600 Pinout SOIC-8 Pin-Out
+─────────────────────────────────────────
+        ┌───────────┐
+ VDD5V ─┤ 1       8 ├── DIR
+ VDD3V3─┤ 2       7 ├── SCL
+  OUT  ─┤ 3       6 ├── SDA
+  GND  ─┤ 4       5 ├── PGO
+        └───────────┘
+
+Pin Descriptions
+─────────────────────────────────────────
+ 1  VDD5V  5V supply    ─┐ tie together,
+ 2  VDD3V3 3.3V supply  ─┘ connect to 3.3V
+ 3  OUT    Analog/PWM output (unused if using I2C)
+ 4  GND    Ground
+ 5  PGO    OTP programming (leave unconnected)
+ 6  SDA    I2C data
+ 7  SCL    I2C clock
+ 8  DIR    Direction select (GND = CW↑, 3.3V = CCW↑)
 
 ### pwm signal:
 D7 (PA8) -> IN1 (Driver) 
 D8 (PA9) -> IN2 (Driver)
 
 ### motor driver:
-VM -> 12V powersupply
+VM -> 24V powersupply
 GND -> ground powersupply
 MOTOR1 -> CW motor signal
 MOTO2 -> CCW motor signal

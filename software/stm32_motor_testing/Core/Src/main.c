@@ -25,6 +25,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include "as5600_position.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -78,8 +79,9 @@ BETAD = exp(-dt/tau)
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
@@ -128,8 +130,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 int _write(int file, char *ptr, int len);
@@ -201,32 +203,11 @@ void ProcessCommand(char *cmd)
 void PrintValues(){
     printf(" ang_curr: %.2f, err: %.2f, P %.2f, I %.2f, D %.2f, Control Output: %.2f \r\n", ang_curr, err, P, I, D, control_signal);
 }
-float GetMotorAngle(){ // tim2 counter period is 2750
-  count_curr = __HAL_TIM_GET_COUNTER(&htim2);
-
-  zone_prev = zone_curr;
-
-  // get current zone
-  if(count_curr <= 500){
-    zone_curr = ZONE_LOW;
-  }
-  else if(count_curr >= 2250){
-    zone_curr = ZONE_HIGH;
-  }
-  else{
-    zone_curr = ZONE_MID;
-  }
-  count_prev = count_curr;
-
-  // if going from high to low add rotation, if low to high subtract rotation
-  if(zone_prev == ZONE_HIGH && zone_curr == ZONE_LOW){
-    rotation_count++;
-  }
-  else if(zone_prev == ZONE_LOW && zone_curr == ZONE_HIGH){
-    rotation_count--;
-  }
-
-  return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 2.0 * M_PI; // rotations + angle
+float GetMotorAngle(){ 
+    AS5600_Update();
+    AS5600_Position_t pos;
+    AS5600_GetPosition(&pos);
+    return (pos.absolute_ticks / 4096.0f) * 2.0f * M_PI;
 }
 
 float GetMotorAngVel(){
@@ -320,7 +301,7 @@ void AngInit(void)
 
       if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
         MotorStop();
-        __HAL_TIM_SET_COUNTER(&htim2, 0);  // reset encoder
+        AS5600_ResetPosition();
         ang_curr = 0;
 
         HAL_TIM_Base_Start_IT(&htim3);     // start PID loop
@@ -348,7 +329,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-   HAL_Init();
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -365,34 +346,24 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();
   MX_TIM3_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   // start the timer in encoder mode
  
-  // start tim1 PWM channels
+  // start tim1 PWM channels for motor
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
   MotorStop();
 
-  // start tim2 in encoder mode
-  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
-  AngInit();
-    
-    
-    // HAL_Delay(5000);
-    // ang_set = 90.0 * M_PI / 180.0; 
-    // HAL_Delay(5000);
-    // ang_set = 180.0 * M_PI / 180.0; 
-    // HAL_Delay(5000);
-    // ang_set = 270.0 * M_PI / 180.0; 
-    // HAL_Delay(5000);
-    // ang_set = 360.0 * M_PI / 180.0; 
-    // HAL_Delay(5000);
-    // ang_set = 0.0;
+  // initialize HAL-effect sensor
+  if (AS5600_Init() != HAL_OK) 
+    {
+        printf("AS5600: no magnet, position unreliable\r\n");
+    }
     
   /* USER CODE END 2 */
 
@@ -412,10 +383,11 @@ int main(void)
     }
     if(current_mode == MODE_STOP){
       MotorStop();
-      ang_set = ang_curr; // set setpoint to current angle so that when we exit stop mode it doesn't try to correct for error accumulated during stop
-      MotorStop();
+      ang_set = ang_curr; 
     }
-
+    ang_curr = GetMotorAngle();
+    //printf("Ticks: %lld  Turns: %ld  Angle: %u\r\n", pos.absolute_ticks, pos.turns, pos.raw_angle);
+    HAL_Delay(5);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -475,6 +447,40 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
@@ -553,55 +559,6 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
-
-}
-
-/**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_Encoder_InitTypeDef sConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 2750;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
-  if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -729,10 +686,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM3)  
     {
         /* USER CODE BEGIN TIM3_ISR */
-        ang_curr = GetMotorAngle();
-        // IRRFilderF(&ang_curr);
-        MotorControl();
-        //printf("%.2f\r\n", ang_curr*180.0/M_PI);
 
         /* USER CODE END TIM3_ISR */
     }
