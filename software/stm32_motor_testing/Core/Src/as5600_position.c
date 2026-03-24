@@ -15,14 +15,14 @@ AS5600 Pinout SOIC-8 Pin-Out
 
 Pin Descriptions
 ─────────────────────────────────────────
- 1  VDD5V  5V supply    ─┐ tie together,
- 2  VDD3V3 3.3V supply  ─┘ connect to 3.3V
- 3  OUT    Analog/PWM output (unused if using I2C)
- 4  GND    Ground
- 5  PGO    OTP programming (leave unconnected)
- 6  SDA    I2C data
- 7  SCL    I2C clock
- 8  DIR    Direction select (GND = CW↑, 3.3V = CCW↑)
+1  VDD5V  5V supply    ─┐ tie together,
+2  VDD3V3 3.3V supply  ─┘ connect to 3.3V
+3  OUT    Analog/PWM output (unused if using I2C)
+4  GND    Ground
+5  PGO    OTP programming (leave unconnected)
+6  SDA    I2C data (3k ohm pull-up)
+7  SCL    I2C clock (3k ohm pull-up)
+8  DIR    Direction select (GND = CW↑, 3.3V = CCW↑)
 */
 
 #include "as5600_position.h"

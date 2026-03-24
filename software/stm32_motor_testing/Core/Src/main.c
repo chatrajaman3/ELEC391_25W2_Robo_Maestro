@@ -1,85 +1,32 @@
 /* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "motor_control.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include <math.h>
-#include <string.h>
-#include <stdlib.h>
 #include "as5600_position.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum{
-  ZONE_LOW, // when encoder count is 0-500
-  ZONE_MID, // when encoder count is 500-2250
-  ZONE_HIGH // when encoder count is 2250-2750
-} CounterZone; // for rotation tracking
-
-typedef enum{
-  MODE_MENU,
-  MODE_RECEIVE,
-  MODE_READ_VELOCITY,
-  MODE_STOP
-} UARTMode;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// PID control limits
-#define PID_ABS_MIN_OUTPUT 30000.0
-#define PID_ABS_MAX_OUTPUT 65535.0
-// integral windup limits
-#define INTEGRAL_MAX 1
-#define INTEGRAL_MIN -1
-// error deadzone
-#define ERROR_THRESHOLD 0.02 // rad
-
-/* control loop timing */
-/*
-Hz ftimer = fclk/(PSC+1)
-dt = (ARR+1)/ftimer
-CF = 1/dt 
-tau = 5*dt (for now)
-BETAD = exp(-dt/tau)
-*/
-#define DT 0.01 
-#define CONTROL_FREQUENCY 100.0 
-#define TAU 0.05
-#define BETAD 0.6065
-#define BETAF 0.2
-
-// other defines
-#define RX_BUFFER_SIZE 32
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi2;
+DMA_HandleTypeDef hdma_spi2_tx;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
@@ -87,232 +34,22 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
-  // Logic and Reading variables
-  int32_t rotation_count = 0;
-  CounterZone zone_curr = ZONE_MID;
-  CounterZone zone_prev = ZONE_MID;
-  float ang_set = 0;
-  float ang_curr = 0; 
-  float ang_prev = 0;
-  float ang_vel = 0; 
-  uint16_t tick_curr = 0;
-  uint16_t tick_prev = 0;
-  uint16_t count_curr = 0;
-  uint16_t count_prev = 0;
-
-  // PID parameters
-  float Kp = 350000.0;
-  float Ki = 20000.0;
-  float Kd = 15000.0;
-
-  // PID variables
-  float err = 0;
-  float err_prev = 0;
-  float integral = 0;
-  float derivative = 0;
-  float control_signal = 0;
-  float P = 0;
-  float I = 0;
-  float D = 0;
-
-  // other variables
-  uint8_t rx_char;
-  char rx_buffer[RX_BUFFER_SIZE];
-  uint8_t rx_index = 0;
-  volatile uint8_t command_ready = 0;
-  UARTMode current_mode = MODE_MENU;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
-
-int _write(int file, char *ptr, int len);
-void PrintValues(void);
-float GetMotorAngle(void);
-float GetMotorAngVel(void);
-void IRRFilderD(float* sigD);
-void IRRFilderF(float* sigF);
-float PID(void);
-void MotorStop(void);
-void MotorCW(uint16_t duty_cycle);
-void MotorCCW(uint16_t duty_cycle);
-void MotorControl(void);
-void ProcessCommand(char *cmd);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-// this function redirects printf output to UART3
-int _write(int file, char *ptr, int len)
-{
-    HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
-    return len;
-}
-
-void ProcessCommand(char *cmd)
-{
-    if(current_mode != MODE_MENU){ // enter m to return to menu
-      if(strncmp(cmd, "m", 1) ==0){
-        current_mode = MODE_MENU;
-        printf("Switched to MENU mode\r\n");
-      }
-    }
-    else if(strncmp(cmd, "set ", 4) == 0) // enter set (angle) to change the setpoint angle
-    {
-        float val = atof(&cmd[4]);
-        ang_set = val * M_PI / 180.0; // convert to radians
-        printf("New set angle: %.2f\r\n", ang_set);
-    }
-    else if(strncmp(cmd, "set ", 4) == 0) // enter set (angle) to change the setpoint angle
-    {
-        float val = atof(&cmd[4]);
-        ang_set = val * M_PI / 180.0; // convert to radians
-        printf("New set angle: %.2f\r\n", ang_set);
-    }
-    else if(strncmp(cmd, "r", 1) == 0) // enter r to receive info in the from PrintValues()
-    {
-        current_mode = MODE_RECEIVE;
-        printf("Switched to RECEIVE mode\r\n");
-    }
-    else if(strncmp(cmd, "v", 1) == 0) // enter v to read angular velocity
-    {
-        current_mode = MODE_READ_VELOCITY;
-        printf("Switched to READ VELOCITY mode\r\n");
-    }
-    else if(strncmp(cmd, "s", 1) == 0) // enter s to stop motor
-    {
-        current_mode = MODE_STOP;
-        printf("Switched to STOP mode\r\n");
-    }
-    else // if command not recognized, print error message
-    {
-        printf("Unknown command\r\n");
-    }
-}
-
-void PrintValues(){
-    printf(" ang_curr: %.2f, err: %.2f, P %.2f, I %.2f, D %.2f, Control Output: %.2f \r\n", ang_curr, err, P, I, D, control_signal);
-}
-float GetMotorAngle(){ 
-    AS5600_Update();
-    AS5600_Position_t pos;
-    AS5600_GetPosition(&pos);
-    return (pos.absolute_ticks / 4096.0f) * 2.0f * M_PI;
-}
-
-float GetMotorAngVel(){
-    ang_vel = (ang_curr - ang_prev) / DT;
-    return ang_vel;
-}
-
-void IRRFilderD(float* sigD){
-  static float sigfilt_prev;
-  *sigD = BETAD * sigfilt_prev + (1 - BETAD) * (*sigD);
-  sigfilt_prev = *sigD;
-}
-
-void IRRFilderF(float* sigF){
-  static float sigfilt_prev;
-  *sigF = BETAF * sigfilt_prev + (1 - BETAF) * (*sigF);
-  sigfilt_prev = *sigF;
-}
-
-float PID(){
-  err = ang_set - ang_curr;
-  // if within treshold, zero error and integral
-  if(fabsf(err) < ERROR_THRESHOLD){
-    err = 0;
-    integral = 0;
-  }
-  integral += err * DT;
-  derivative = (ang_curr - ang_prev) / DT;
-  IRRFilderD(&derivative);
-  err_prev = err;
-  ang_prev = ang_curr;
-
-  // clamp integral
-  if(integral > INTEGRAL_MAX){
-    integral = INTEGRAL_MAX;
-  }
-  if(integral < INTEGRAL_MIN){
-    integral = INTEGRAL_MIN;
-  }
-
-  P = Kp * err;
-  I = Ki * integral;
-  D = -Kd * derivative;
-  control_signal = P + I + D;
-
-  // clamp control signal
-  if(control_signal > PID_ABS_MAX_OUTPUT){
-    control_signal = PID_ABS_MAX_OUTPUT;
-  }
-  if(control_signal < -PID_ABS_MAX_OUTPUT){
-    control_signal = -PID_ABS_MAX_OUTPUT;
-  }
-  return control_signal;
-}
-
-void MotorStop(){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
-}
-
-void MotorCW(uint16_t duty_cycle){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty_cycle); // set duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
-}
-void MotorCCW(uint16_t duty_cycle){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle); // set duty cycle
-}
-
-void MotorControl(){
-  control_signal = PID(); // scale control signal to timer period
-  if(fabsf(control_signal) < PID_ABS_MIN_OUTPUT){
-    MotorStop();
-  }
-  else if (control_signal > 0){
-    MotorCW((uint16_t)control_signal);
-  }
-  else{
-    MotorCCW((uint16_t)(-control_signal));
-  }
-}
-
-void AngInit(void)
-{
-  MotorCW(33000);   // Spin slowly
-
-  while (1)
-  {
-    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
-      HAL_Delay(20);  // debounce
-
-      if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
-        MotorStop();
-        AS5600_ResetPosition();
-        ang_curr = 0;
-
-        HAL_TIM_Base_Start_IT(&htim3);     // start PID loop
-
-        break;  // exit homing loop
-      }
-    }
-  }
-}
-
-
 /* USER CODE END 0 */
 
 /**
@@ -323,7 +60,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -332,64 +68,37 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  // start the timer in encoder mode
- 
-  // start tim1 PWM channels for motor
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  if (AS5600_Init() != HAL_OK) {
+    printf("AS5600: no magnet detected, position not accurate\r\n");
+  }
 
-  MotorStop();
-
-  HAL_UART_Receive_IT(&huart2, &rx_char, 1);
-  
-  // initialize HAL-effect sensor
-  if (AS5600_Init() != HAL_OK) 
-    {
-        printf("AS5600: no magnet, position unreliable\r\n");
-    }
-    
+  MotorControl_Init();
+  MotorControl_Home();
   /* USER CODE END 2 */
 
   /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    if(command_ready){
-      ProcessCommand(rx_buffer);
-      command_ready = 0;
-    }
-    if(current_mode == MODE_RECEIVE){
-      PrintValues();
-    }
-    if(current_mode == MODE_READ_VELOCITY){
-      printf("ang_curr: %.2f\r\n", ang_vel);
-    }
-    if(current_mode == MODE_STOP){
-      MotorStop();
-      ang_set = ang_curr; 
-    }
-    ang_curr = GetMotorAngle();
-    //printf("Ticks: %lld  Turns: %ld  Angle: %u\r\n", pos.absolute_ticks, pos.turns, pos.raw_angle);
-    HAL_Delay(5);
-    /* USER CODE END WHILE */
 
+  /* USER CODE BEGIN WHILE */
+  while (1) {
+    /* USER CODE END WHILE */
+    MotorControl_Process();
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -458,11 +167,9 @@ static void MX_I2C1_Init(void)
 {
 
   /* USER CODE BEGIN I2C1_Init 0 */
-
   /* USER CODE END I2C1_Init 0 */
 
   /* USER CODE BEGIN I2C1_Init 1 */
-
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
   hi2c1.Init.ClockSpeed = 400000;
@@ -478,8 +185,42 @@ static void MX_I2C1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN I2C1_Init 2 */
-
   /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+  /* USER CODE END SPI2_Init 2 */
 
 }
 
@@ -492,7 +233,6 @@ static void MX_TIM1_Init(void)
 {
 
   /* USER CODE BEGIN TIM1_Init 0 */
-
   /* USER CODE END TIM1_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
@@ -501,7 +241,6 @@ static void MX_TIM1_Init(void)
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
-
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
@@ -556,7 +295,6 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
-
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
 
@@ -571,14 +309,12 @@ static void MX_TIM3_Init(void)
 {
 
   /* USER CODE BEGIN TIM3_Init 0 */
-
   /* USER CODE END TIM3_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
-
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 8999;
@@ -602,7 +338,6 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
-
   /* USER CODE END TIM3_Init 2 */
 
 }
@@ -616,11 +351,9 @@ static void MX_USART2_UART_Init(void)
 {
 
   /* USER CODE BEGIN USART2_Init 0 */
-
   /* USER CODE END USART2_Init 0 */
 
   /* USER CODE BEGIN USART2_Init 1 */
-
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
   huart2.Init.BaudRate = 115200;
@@ -635,8 +368,23 @@ static void MX_USART2_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
-
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
 }
 
@@ -649,7 +397,6 @@ static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
-
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
@@ -659,7 +406,14 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TFT_CS_Pin|TFT_DC_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
+                          |SLND2_Pin|SLND1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|SLND5_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -667,64 +421,49 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin TFT_CS_Pin TFT_DC_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|TFT_CS_Pin|TFT_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : TFT_RST_Pin SD_CS_Pin SLND4_Pin SLND3_Pin
+                           SLND2_Pin SLND1_Pin */
+  GPIO_InitStruct.Pin = TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
+                          |SLND2_Pin|SLND1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : TFT_BL_Pin SLND5_Pin */
+  GPIO_InitStruct.Pin = TFT_BL_Pin|SLND5_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-/* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM3)  
+    if (htim->Instance == TIM3)
     {
-        /* USER CODE BEGIN TIM3_ISR */
-
-        /* USER CODE END TIM3_ISR */
+        MotorControl_TimerISR();   /* reads encoder, runs PID, drives motor */
     }
 }
+ 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART2)
     {
-        HAL_UART_Transmit(&huart2, &rx_char, 1, HAL_MAX_DELAY);
-        // Detect end of command
-        if (rx_char == '\r' || rx_char == '\n')
-        {
-            if (rx_index > 0)   // Ignore empty ENTER presses
-            {
-                rx_buffer[rx_index] = '\0';   // Null terminate string
-                command_ready = 1;
-                rx_index = 0;
-            }
-        }
-        else
-        {
-            // Store received character if buffer not full
-            if (rx_index < RX_BUFFER_SIZE - 1)
-            {
-                rx_buffer[rx_index++] = rx_char;
-            }
-            else
-            {
-                // Buffer overflow protection
-                rx_index = 0;
-            }
-        }
-
-        // Re-arm UART interrupt (VERY IMPORTANT)
-        HAL_UART_Receive_IT(&huart2, &rx_char, 1);
+        MotorControl_UartISR();    /* echo char, build command, set flag */
     }
 }
-    
-
 /* USER CODE END 4 */
 
 /**
@@ -734,11 +473,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
@@ -752,8 +486,6 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
