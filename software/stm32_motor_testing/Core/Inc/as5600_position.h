@@ -31,35 +31,11 @@
 #define AS5600_I2C_ADDR         (0x36 << 1)
 
 /**
- * Flash sector used for position storage.
- * STM32F446RE Flash layout (single bank):
- *   Sector 0 – 0x0800 0000  16 KB  ]
- *   Sector 1 – 0x0800 4000  16 KB  ] usually holds your application code
- *   Sector 2 – 0x0800 8000  16 KB  ]
- *   Sector 3 – 0x0800 C000  16 KB  ]
- *   Sector 4 – 0x0801 0000  64 KB  ]
- *   Sector 5 – 0x0802 0000 128 KB  <-- used for position storage
- *   Sector 6 – 0x0804 0000 128 KB
- *   Sector 7 – 0x0806 0000 128 KB
- *
- * If your application grows into sector 5, bump to sector 6/7 and
- * update both defines below accordingly.
- */
-#define FLASH_SAVE_SECTOR       FLASH_SECTOR_5
-#define FLASH_SAVE_ADDR         0x08020000UL
-
-/**
  * Rollover threshold in ticks.
  * A jump larger than this between two polls = rollover, not real motion.
  * 2048 (half of 4096) works for any polling period up to ~10 ms.
  */
 #define ROLLOVER_THRESHOLD      2048
-
-/**
- * Magic number stored at the beginning of the Flash record.
- * Lets us distinguish a programmed sector from a blank (0xFFFFFFFF) one.
- */
-#define FLASH_MAGIC             0xA55A1234UL
 
 /* ── Public types ──────────────────────────────────────────────────────── */
 
@@ -72,8 +48,8 @@ typedef struct {
 /* ── Public API ────────────────────────────────────────────────────────── */
 
 /**
- * @brief  Initialise driver. Loads last saved position from Flash (if any),
- *         reads the current sensor angle and reconciles them.
+ * @brief  Initialise driver. Reads the current sensor angle and initialises
+ *         the position counter to zero.
  *         Call once after HAL_Init() and MX_I2Cx_Init().
  * @retval HAL_OK on success, HAL_ERROR if magnet not detected
  */
@@ -87,24 +63,16 @@ HAL_StatusTypeDef AS5600_Init(void);
 HAL_StatusTypeDef AS5600_Update(void);
 
 /**
- * @brief  Save current position to Flash.
- *         Call this when Button_Update() returns 1.
- * @retval HAL_OK on success
- */
-HAL_StatusTypeDef AS5600_SavePosition(void);
-
-/**
  * @brief  Get a snapshot of the current position.
  * @param  pos  Pointer to caller-allocated AS5600_Position_t
  */
 void AS5600_GetPosition(AS5600_Position_t *pos);
 
 /**
- * @brief  Zero the position counter and save to Flash.
+ * @brief  Zero the position counter.
  *         Use at a known home position during commissioning.
- * @retval HAL_OK on success
  */
-HAL_StatusTypeDef AS5600_ResetPosition(void);
+void AS5600_ResetPosition(void);
 
 /**
  * @brief  Returns true if magnet is present and field strength is OK.

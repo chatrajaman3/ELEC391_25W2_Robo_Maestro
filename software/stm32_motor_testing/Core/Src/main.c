@@ -85,9 +85,19 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  if (AS5600_Init() != HAL_OK) {
-    printf("AS5600: no magnet detected, position not accurate\r\n");
+  printf("\r\n--- AS5600 Sensor Check ---\r\n");
+  AS5600_PrintMagnetStatus();
+  if (AS5600_Init() == HAL_OK) {
+    printf("Sensor ready\r\n");
+  } else {
+    printf("Sensor init failed\r\n");
   }
+
+  printf("\r\nPress Enter to start reading angles...\r\n");
+  uint8_t rx_byte;
+  do {
+    HAL_UART_Receive(&huart2, &rx_byte, 1, HAL_MAX_DELAY);
+  } while (rx_byte != '\r' && rx_byte != '\n');
 
   MotorControl_Init();
   MotorControl_Home();
@@ -98,6 +108,13 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE END WHILE */
+    AS5600_Update();
+    AS5600_Position_t pos;
+    AS5600_GetPosition(&pos);
+    printf("Angle: %u ticks  (%.2f deg)\r\n",
+           (unsigned)pos.raw_angle,
+           pos.raw_angle * 360.0f / 4096.0f);
+    HAL_Delay(100);
     MotorControl_Process();
     /* USER CODE BEGIN 3 */
   }
