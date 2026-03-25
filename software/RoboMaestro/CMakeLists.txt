@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/xpt2046.c
     Core/Src/menu.c
     Core/Src/motor_control.c
+    Core/Src/actuator.c
 )
 
 # Add include paths
