@@ -89,12 +89,6 @@ void Error_Handler(void);
 #define SLND2_GPIO_Port GPIOC
 #define SLND1_Pin GPIO_PIN_9
 #define SLND1_GPIO_Port GPIOC
-#define BTN3_Pin GPIO_PIN_10
-#define BTN3_GPIO_Port GPIOA
-#define BTN2_Pin GPIO_PIN_11
-#define BTN2_GPIO_Port GPIOA
-#define BTN1_Pin GPIO_PIN_12
-#define BTN1_GPIO_Port GPIOA
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
