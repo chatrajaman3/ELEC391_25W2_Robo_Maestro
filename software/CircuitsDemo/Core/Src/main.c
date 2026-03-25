@@ -25,6 +25,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include "actuator.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,7 +43,8 @@ typedef enum{
   MODE_CW,
   MODE_CCW,
   MODE_ACTUATE,
-  MODE_STOP
+  MODE_STOP,
+  MODE_FINGER_ONOFF  // waiting for "on" or "off" after "fingers" command
 } UARTMode;
 
 typedef struct {
@@ -90,6 +92,17 @@ UART_HandleTypeDef huart2;
   uint16_t tick_prev = 0;
   uint16_t count_curr = 0;
   uint16_t count_prev = 0;
+
+  // Finger actuator pins (update these to match your hardware)
+  // Finger: 1        2        3        4        5
+  GPIO_Pin_t fingers[5] = {
+    {GPIOB, GPIO_PIN_10},
+    {GPIOB, GPIO_PIN_4},
+    {GPIOB, GPIO_PIN_5},
+    {GPIOB, GPIO_PIN_6},
+    {GPIOB, GPIO_PIN_7}
+  };
+  uint8_t selected_fingers = 0; // bitmask of fingers chosen by "fingers" command
 
   // other variables
   uint8_t rx_char;
@@ -149,38 +162,133 @@ int _write(int file, char *ptr, int len)
 
 void ProcessCommand(char *cmd)
 {
-    if(current_mode != MODE_MENU){ // enter m to return to menu
-      if(strncmp(cmd, "m", 1) ==0){
+    // 'm' returns to menu from any mode
+    if (current_mode != MODE_MENU && strncmp(cmd, "m", 1) == 0)
+    {
         current_mode = MODE_MENU;
         printf("Switched to MENU mode\r\n");
-      }
+        return;
     }
-    else if(strncmp(cmd, "cw", 2) == 0) // enter cw to rotate clockwise
+
+    // Waiting for "on" or "off" after a "fingers" command
+    if (current_mode == MODE_FINGER_ONOFF)
+    {
+        if (strncmp(cmd, "on", 2) == 0)
+        {
+            for (int i = 0; i < 5; i++) {
+                if (selected_fingers & (1 << i))
+                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_SET);
+            }
+            printf("Fingers ON\r\n");
+        }
+        else if (strncmp(cmd, "off", 3) == 0)
+        {
+            for (int i = 0; i < 5; i++) {
+                if (selected_fingers & (1 << i))
+                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
+            }
+            printf("Fingers OFF\r\n");
+        }
+        else
+        {
+            printf("Type 'on', 'off', or 'm' for menu\r\n");
+            return;
+        }
+        current_mode = MODE_MENU;
+        return;
+    }
+
+    // Menu-mode commands
+    if (strncmp(cmd, "fingers", 7) == 0)
+    {
+        char *p = cmd + 7;
+        char *endptr;
+        selected_fingers = 0;
+        int8_t state = -1; // -1 = not set, 0 = off, 1 = on
+
+        while (*p)
+        {
+            // skip spaces
+            while (*p == ' ') p++;
+            if (*p == '\0') break;
+
+            // try to parse as a number first
+            long n = strtol(p, &endptr, 10);
+            if (endptr != p)
+            {
+                if (n >= 1 && n <= 5) selected_fingers |= (1 << (n - 1));
+                p = endptr;
+            }
+            else
+            {
+                // not a number — check for "on" or "off"
+                if (strncmp(p, "on", 2) == 0 && (p[2] == ' ' || p[2] == '\0'))
+                {
+                    state = 1;
+                    p += 2;
+                }
+                else if (strncmp(p, "off", 3) == 0 && (p[3] == ' ' || p[3] == '\0'))
+                {
+                    state = 0;
+                    p += 3;
+                }
+                else
+                {
+                    // skip unknown token
+                    while (*p && *p != ' ') p++;
+                }
+            }
+        }
+
+        if (selected_fingers == 0)
+        {
+            printf("No valid fingers (1-5). Usage: fingers 1 2 3 on\r\n");
+        }
+        else if (state == -1)
+        {
+            // no on/off provided — store selection and prompt
+            printf("Selected fingers:");
+            for (int i = 0; i < 5; i++) {
+                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
+            }
+            printf("\r\nTurn on or off? (on/off): ");
+            current_mode = MODE_FINGER_ONOFF;
+        }
+        else
+        {
+            GPIO_PinState pin_state = (state == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+            for (int i = 0; i < 5; i++) {
+                if (selected_fingers & (1 << i))
+                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, pin_state);
+            }
+            printf("Fingers");
+            for (int i = 0; i < 5; i++) {
+                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
+            }
+            printf(" %s\r\n", (state == 1) ? "ON" : "OFF");
+        }
+    }
+    else if (strncmp(cmd, "cw", 2) == 0)
     {
         current_mode = MODE_CW;
         printf("Switched to CW mode\r\n");
     }
-    else if(strncmp(cmd, "ccw", 3) == 0) // enter ccw to rotate counter-clockwise
+    else if (strncmp(cmd, "ccw", 3) == 0)
     {
         current_mode = MODE_CCW;
         printf("Switched to CCW mode\r\n");
     }
-    else if(strncmp(cmd, "act", 3) == 0) // enter act to actuate motor
-    {
-        current_mode = MODE_ACTUATE;
-        printf("Switched to ACTUATE mode\r\n");
-    }
-    else if(strncmp(cmd, "v", 1) == 0) // enter v to read angular velocity
+    else if (strncmp(cmd, "v", 1) == 0)
     {
         current_mode = MODE_READ_VELOCITY;
         printf("Switched to READ VELOCITY mode\r\n");
     }
-    else if(strncmp(cmd, "s", 1) == 0) // enter s to stop motor
+    else if (strncmp(cmd, "s", 1) == 0)
     {
         current_mode = MODE_STOP;
         printf("Switched to STOP mode\r\n");
     }
-    else // if command not recognized, print error message
+    else
     {
         printf("Unknown command\r\n");
     }
@@ -311,6 +419,8 @@ int main(void)
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // set PB12 low
+
+  Actuator_Init(5, fingers[0], fingers[1], fingers[2], fingers[3], fingers[4]);
 
   Button_Init(&blue_button, GPIOC, GPIO_PIN_13, 20); // initialize blue button with 20ms debounce delay
     
@@ -654,7 +764,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_4, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -669,8 +779,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 PB4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_4;
+  /*Configure GPIO pins : PB10 PB4 PB5 PB6 PB7 (finger solenoids 1-5) */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
