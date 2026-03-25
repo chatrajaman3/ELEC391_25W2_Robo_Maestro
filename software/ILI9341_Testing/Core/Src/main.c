@@ -21,29 +21,29 @@
    * ║   Module                        STM32          Nucleo Header         ║
    * ║  ┌─────────┐                                                         ║
    * ║  │  T_IRQ  ├──────────────────  PB2            CN10 morpho           ║
-   * ║  │  T_OUT  ├────────────────┐   PC2   ┐        CN7  morpho           ║
-   * ║  │  T_DIN  ├──────────────┐ │   PC1   ┤        A4   (CN8)            ║
+   * ║  │  T_OUT  ├────────────────┐   PA6   ┐        CN7  morpho           ║
+   * ║  │  T_DIN  ├──────────────┐ │   PA7   ┤        A4   (CN8)            ║
    * ║  │  T_CS   ├──────────────│─│─  PB1            CN10 morpho           ║
-   * ║  │  T_CLK  ├────────────┐ │ │   PB10  ┐        D6   (CN5)            ║
-   * ║  │  SDO    ├────────────│─│─┘   PC2   ┘ shared with T_OUT            ║
+   * ║  │  T_CLK  ├────────────┐ │ │   PA5  ┐        D6   (CN5)             ║
+   * ║  │  SDO    ├────────────│─│─┘   PA6   ┘ shared with T_OUT            ║
    * ║  │  LED    ├────────────│─│───  PB0            A3   (CN8)            ║
-   * ║  │  SCK    ├────────────┘ │     PB10    shared with T_CLK            ║
-   * ║  │  SDI    ├──────────────┘     PC1     shared with T_DIN            ║
-   * ║  │  DC/RS  ├──────────────────  PA7            D11  (CN9)            ║
+   * ║  │  SCK    ├────────────┘ │     PA5    shared with T_CLK             ║
+   * ║  │  SDI    ├──────────────┘     PA7     shared with T_DIN            ║
+   * ║  │  DC/RS  ├──────────────────  PA0            D11  (CN9)            ║
    * ║  │  RESET  ├──────────────────  PC4            CN10 morpho           ║
-   * ║  │  CS     ├──────────────────  PA6            D12  (CN9)            ║
+   * ║  │  CS     ├──────────────────  PA1            D12  (CN9)            ║
    * ║  │  GND    ├──────────────────  GND            any GND               ║
    * ║  │  VCC    ├──────────────────  3.3V           CN6  pin 4            ║
    * ║  └─────────┘                                                         ║
-   * ║  │  SD_SCK   ├──────────────────  PB10         shared with T_CLK     ║
-   * ║  │  SD_MOSI  ├──────────────────  PC1          shared with T_DIN     ║
-   * ║  │  SD_MISO  ├──────────────────  PC2          shared with T_OUT     ║
+   * ║  │  SD_SCK   ├──────────────────  PA5         shared with T_CLK      ║ 
+   * ║  │  SD_MOSI  ├──────────────────  PA7          shared with T_DIN     ║
+   * ║  │  SD_MISO  ├──────────────────  PA6          shared with T_OUT     ║
    * ║  │  SD_CS    ├──────────────────  PC5          CN10 morpho           ║
-   * ║  SPI2 shared bus:  SCK = PB10  │  MOSI = PC1  │  MISO = PC2          ║
+   * ║  SPI2 shared bus:  SCK = PA5  │  MOSI = PA7  │  MISO = PA6           ║
    * ║  Connected These Pins Together Externally:                           ║
-   * ║  SDO/T_OUT/SD_MISO  → same wire → PC2                                ║
-   * ║  SDI/T_DIN/SD_MOSI  → same wire → PC1                                ║
-   * ║  SCK/T_CLK/SD_SCK  → same wire → PB10                                ║
+   * ║  SDO/T_OUT/SD_MISO  → same wire → PA6                                ║
+   * ║  SDI/T_DIN/SD_MOSI  → same wire → PA7                                ║
+   * ║  SCK/T_CLK/SD_SCK  → same wire → PA5                                 ║
    * ╚══════════════════════════════════════════════════════════════════════╝
    
 /* USER CODE END Header */
