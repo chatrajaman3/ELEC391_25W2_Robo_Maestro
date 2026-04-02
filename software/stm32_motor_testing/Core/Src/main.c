@@ -2,12 +2,12 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "motor_control.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "as5600_position.h"
+#include "motor_control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,7 +65,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+    HAL_Init();
 
   /* USER CODE BEGIN Init */
   /* USER CODE END Init */
@@ -85,36 +85,15 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  printf("\r\n--- AS5600 Sensor Check ---\r\n");
-  AS5600_PrintMagnetStatus();
-  if (AS5600_Init() == HAL_OK) {
-    printf("Sensor ready\r\n");
-  } else {
-    printf("Sensor init failed\r\n");
-  }
-
-  printf("\r\nPress Enter to start reading angles...\r\n");
-  uint8_t rx_byte;
-  do {
-    HAL_UART_Receive(&huart2, &rx_byte, 1, HAL_MAX_DELAY);
-  } while (rx_byte != '\r' && rx_byte != '\n');
-
+  AS5600_Init();
   MotorControl_Init();
   MotorControl_Home();
   /* USER CODE END 2 */
 
   /* Infinite loop */
-
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE END WHILE */
-    AS5600_Update();
-    AS5600_Position_t pos;
-    AS5600_GetPosition(&pos);
-    printf("Angle: %u ticks  (%.2f deg)\r\n",
-           (unsigned)pos.raw_angle,
-           pos.raw_angle * 360.0f / 4096.0f);
-    HAL_Delay(100);
     MotorControl_Process();
     /* USER CODE BEGIN 3 */
   }
@@ -462,6 +441,12 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* Override PC13 (user button) with internal pull-up so it reads reliably
+   * without requiring an external resistor. Active-low: pressed = RESET. */
+  GPIO_InitStruct.Pin  = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 

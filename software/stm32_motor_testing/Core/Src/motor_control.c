@@ -15,15 +15,16 @@
 
 /* ── Private state ───────────────────────────────────────────────────────── */
 
-/* Angle / velocity */
-static float ang_set  = 0.0f;
-static float ang_curr = 0.0f;
-static float ang_prev = 0.0f;
-static float ang_vel  = 0.0f;
+/* Angle / linear position */
+static float   ang_set    = 0.0f;
+static float   ang_curr   = 0.0f;
+static float   ang_prev   = 0.0f;
+static float   lin_pos    = 0.0f;  /* metres */
+static int64_t home_offset = 0;
 
 /* PID gains — tunable at runtime via MotorControl_SetGains() */
-static float Kp = 350000.0f;
-static float Ki =  20000.0f;
+static float Kp = 50000.0f;
+static float Ki =  10000.0f;
 static float Kd =  15000.0f;
 
 /* PID working variables */
@@ -31,6 +32,7 @@ static float err          = 0.0f;
 static float integral     = 0.0f;
 static float derivative   = 0.0f;
 static float control_signal = 0.0f;
+static float actual_pwm     = 0.0f;  /* clamped value actually sent to timer */
 static float P = 0.0f, I = 0.0f, D = 0.0f;
 
 /* UART */
@@ -39,6 +41,12 @@ static char     rx_buffer[RX_BUFFER_SIZE];
 static uint8_t  rx_index = 0;
 static volatile uint8_t command_ready = 0;
 static UARTMode current_mode = MODE_MENU;
+
+/* Control-loop tick flag — set by ISR, cleared in Process() */
+static volatile uint8_t pid_tick = 0;
+
+/* Print rate divider: print every 10 ticks = 10 Hz */
+static uint8_t print_div = 0;
 
 /* ── Private helpers ─────────────────────────────────────────────────────── */
 
@@ -50,10 +58,26 @@ int _write(int file, char *ptr, int len)
 }
 
 /* -------------------------------------------------------------------------- */
+static void PrintMenu(void)
+{
+    printf("\r\n=== Motor Control Commands ===\r\n");
+    printf("  set <deg>            Set position setpoint (degrees)\r\n");
+    printf("  setl <cm>            Set linear position setpoint (cm)\r\n");
+    printf("  a                    Print current position & setpoint\r\n");
+    printf("  r                    RECEIVE mode: stream PID telemetry at 10 Hz\r\n");
+    printf("  s                    STOP motor\r\n");
+    printf("  gains <kp> <ki> <kd> Update PID gains\r\n");
+    printf("  m                    Return to MENU (stop streaming)\r\n");
+    printf("  ?                    Show this menu\r\n");
+    printf("==============================\r\n");
+}
+
+/* -------------------------------------------------------------------------- */
 static void PrintValues(void)
 {
-    printf(" ang_curr: %.2f, err: %.2f, P %.2f, I %.2f, D %.2f, Output: %.2f\r\n",
-           ang_curr, err, P, I, D, control_signal);
+    printf("lin: %.4f m  err: %.4f rad  pid: %.0f  pwm: %.0f (%.1f%%)\r\n",
+           lin_pos, err, control_signal, actual_pwm,
+           (actual_pwm < 0.0f ? -actual_pwm : actual_pwm) / PID_ABS_MAX_OUTPUT * 100.0f);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -62,7 +86,7 @@ static float GetMotorAngle(void)
     AS5600_Update();
     AS5600_Position_t pos;
     AS5600_GetPosition(&pos);
-    return (pos.absolute_ticks / 4096.0f) * 2.0f * (float)M_PI;
+    return -((pos.absolute_ticks - home_offset) / 4096.0f) * 2.0f * (float)M_PI;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -72,14 +96,6 @@ static void IRRFilterD(float *sigD)
     static float prev = 0.0f;
     *sigD   = BETAD * prev + (1.0f - BETAD) * (*sigD);
     prev    = *sigD;
-}
-
-/** IIR low-pass filter with coefficient BETAF (reserved / feedforward). */
-static void IRRFilterF(float *sigF)
-{
-    static float prev = 0.0f;
-    *sigF   = BETAF * prev + (1.0f - BETAF) * (*sigF);
-    prev    = *sigF;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -138,11 +154,21 @@ static void MotorDrive(void)
 {
     float sig = PID_Compute();
 
-    if (fabsf(sig) < PID_ABS_MIN_OUTPUT) {
+    /* Stop only when error is within dead-zone */
+    if (fabsf(err) < ERROR_THRESHOLD) {
+        actual_pwm = 0.0f;
         MotorStop();
-    } else if (sig > 0.0f) {
+        return;
+    }
+
+    /* Clamp up to minimum duty when actively driving */
+    if (sig > 0.0f) {
+        if (sig < PID_ABS_MIN_OUTPUT) sig = PID_ABS_MIN_OUTPUT;
+        actual_pwm = sig;
         MotorCW((uint16_t)sig);
     } else {
+        if (-sig < PID_ABS_MIN_OUTPUT) sig = -PID_ABS_MIN_OUTPUT;
+        actual_pwm = sig;   /* negative = CCW */
         MotorCCW((uint16_t)(-sig));
     }
 }
@@ -150,35 +176,53 @@ static void MotorDrive(void)
 /* -------------------------------------------------------------------------- */
 static void ProcessCommand(char *cmd)
 {
-    /* 'm' returns to menu from any mode */
-    if (current_mode != MODE_MENU) {
-        if (strncmp(cmd, "m", 1) == 0) {
-            current_mode = MODE_MENU;
-            printf("Switched to MENU mode\r\n");
-            return;
-        }
+    if (strncmp(cmd, "setl ", 5) == 0) {
+        /* "setl <cm>"  — set linear position setpoint */
+        float cm = atof(&cmd[5]);
+        ang_set = (cm / 100.0f) / PITCH_RADIUS;
+        printf("Setpoint: %.2f cm  (%.2f rad)\r\n", cm, ang_set);
     }
-
-    if (strncmp(cmd, "set ", 4) == 0) {
+    else if (strncmp(cmd, "set ", 4) == 0) {
         /* "set <degrees>"  — change the position setpoint */
         float deg = atof(&cmd[4]);
         ang_set = deg * (float)M_PI / 180.0f;
-        printf("New set angle: %.2f rad (%.1f deg)\r\n", ang_set, deg);
+        printf("Setpoint: %.1f deg  (%.4f m)\r\n", deg, ang_set * PITCH_RADIUS);
+    }
+    else if (strncmp(cmd, "gains ", 6) == 0) {
+        /* "gains <kp> <ki> <kd>"  — update PID gains at runtime */
+        float kp, ki, kd;
+        if (sscanf(&cmd[6], "%f %f %f", &kp, &ki, &kd) == 3) {
+            Kp = kp; Ki = ki; Kd = kd;
+            printf("Gains: Kp=%.1f Ki=%.1f Kd=%.1f\r\n", Kp, Ki, Kd);
+        } else {
+            printf("Usage: gains <kp> <ki> <kd>\r\n");
+        }
+    }
+    else if (strncmp(cmd, "a", 1) == 0) {
+        AS5600_PrintMagnetStatus();
+        printf("linear: %.4f m (%.2f cm)  setpoint: %.4f m (%.2f cm)\r\n",
+               lin_pos,           lin_pos           * 100.0f,
+               ang_set * PITCH_RADIUS, ang_set * PITCH_RADIUS * 100.0f);
+        printf("angle:  %.2f rad (%.1f deg)\r\n",
+               ang_curr, ang_curr * 180.0f / (float)M_PI);
     }
     else if (strncmp(cmd, "r", 1) == 0) {
         current_mode = MODE_RECEIVE;
-        printf("Switched to RECEIVE mode\r\n");
-    }
-    else if (strncmp(cmd, "v", 1) == 0) {
-        current_mode = MODE_READ_VELOCITY;
-        printf("Switched to READ VELOCITY mode\r\n");
+        printf("RECEIVE mode (type m to stop)\r\n");
     }
     else if (strncmp(cmd, "s", 1) == 0) {
         current_mode = MODE_STOP;
-        printf("Switched to STOP mode\r\n");
+        printf("Motor STOPPED\r\n");
+    }
+    else if (strncmp(cmd, "m", 1) == 0) {
+        current_mode = MODE_MENU;
+        printf("MENU mode\r\n");
+    }
+    else if (strncmp(cmd, "?", 1) == 0) {
+        PrintMenu();
     }
     else {
-        printf("Unknown command\r\n");
+        printf("Unknown command — type ? for help\r\n");
     }
 }
 
@@ -196,6 +240,8 @@ void MotorControl_Init(void)
 
     /* NOTE: TIM3 (control loop) is NOT started here so the caller can choose
      * whether to start it directly or via MotorControl_Home(). */
+
+    PrintMenu();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -207,41 +253,41 @@ void MotorControl_Process(void)
         command_ready = 0;
     }
 
-    /* Mode-specific main-loop tasks */
-    switch (current_mode) {
-        case MODE_RECEIVE:
-            PrintValues();
-            break;
+    /* PID tick: encoder read + control update moved here to avoid blocking I2C in ISR */
+    if (pid_tick) {
+        pid_tick = 0;
 
-        case MODE_READ_VELOCITY:
-            printf("ang_vel: %.2f rad/s\r\n", ang_vel);
-            break;
+        ang_curr = GetMotorAngle();
+        lin_pos  = ang_curr * PITCH_RADIUS;
 
-        case MODE_STOP:
+        if (current_mode == MODE_STOP) {
+            ang_set  = ang_curr;
+            ang_prev = ang_curr;
             MotorStop();
-            ang_set = ang_curr;   /* freeze setpoint so PID stays quiet */
-            break;
+        } else {
+            MotorDrive();   /* updates ang_prev internally via PID_Compute */
+        }
 
-        default:
-            break;
+        /* Print telemetry at 10 Hz (every 10th tick at 100 Hz control rate) */
+        if (++print_div >= 10) {
+            print_div = 0;
+            switch (current_mode) {
+                case MODE_RECEIVE:
+                    PrintValues();
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 }
 
 /* -------------------------------------------------------------------------- */
 void MotorControl_TimerISR(void)
 {
-    /* 1. Read current angle from encoder */
-    ang_curr = GetMotorAngle();
-
-    /* 2. Compute angular velocity (simple backward difference) */
-    ang_vel = (ang_curr - ang_prev) / DT;
-
-    /* 3. Drive the motor (PID is inside MotorDrive) */
-    if (current_mode != MODE_STOP) {
-        MotorDrive();
-    } else {
-        MotorStop();
-    }
+    /* Set flag only — encoder read and PID run in MotorControl_Process()
+     * to avoid blocking I2C calls inside interrupt context. */
+    pid_tick = 1;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -273,34 +319,37 @@ void MotorControl_Home(void)
 {
     /* Spin slowly CW until the blue user-button (PC13, active-low) is pressed.
      * Then zero the encoder and start the TIM3 control-loop interrupt. */
-    MotorCW(33000);
+    MotorCCW(20000);
 
-    while (1) {
-        if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
-            HAL_Delay(20);   /* debounce */
-            if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
-                MotorStop();
-                AS5600_ResetPosition();
-                ang_curr = 0.0f;
-                ang_prev = 0.0f;
-                HAL_TIM_Base_Start_IT(&htim3);   /* start PID loop */
-                break;
-            }
-        }
-    }
+    while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
+    HAL_Delay(20);   /* debounce */
+    MotorStop();
+    AS5600_ResetPosition();
+    AS5600_Position_t home_pos;
+    AS5600_GetPosition(&home_pos);
+    home_offset = home_pos.absolute_ticks;
+    ang_curr = 0.0f;
+    ang_prev = 0.0f;
+    ang_set  = 0.0f;
+    HAL_TIM_Base_Start_IT(&htim3);   /* start PID loop */
 }
 
 /* ── Getters / setters ───────────────────────────────────────────────────── */
 
 float    MotorControl_GetAngle(void)         { return ang_curr; }
-float    MotorControl_GetAngVel(void)        { return ang_vel;  }
 float    MotorControl_GetSetpoint(void)      { return ang_set;  }
+float    MotorControl_GetLinPos(void)        { return lin_pos;  }
 float    MotorControl_GetControlSignal(void) { return control_signal; }
 UARTMode MotorControl_GetMode(void)          { return current_mode; }
 
 void MotorControl_SetSetpoint(float rad)
 {
     ang_set = rad;
+}
+
+void MotorControl_SetLinSetpoint(float metres)
+{
+    ang_set = metres / PITCH_RADIUS;
 }
 
 void MotorControl_SetGains(float kp, float ki, float kd)

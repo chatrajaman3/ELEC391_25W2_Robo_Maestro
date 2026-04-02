@@ -23,16 +23,19 @@ extern UART_HandleTypeDef huart2;
 
 /* ── Configuration macros ────────────────────────────────────────────────── */
 
-/* PID output limits (maps directly to TIM1 ARR = 65535) */
-#define PID_ABS_MIN_OUTPUT  30000.0f
-#define PID_ABS_MAX_OUTPUT  65535.0f
+/* PID output limits (maps directly to TIM1 ARR = 65535, f_PWM = 2.75 kHz) */
+#define PID_ABS_MIN_OUTPUT  65000.0f  /* 50% duty — minimum when driving    */
+#define PID_ABS_MAX_OUTPUT  65535.0f  /* 100% duty — hard ceiling            */
 
 /* Integral windup clamp */
 #define INTEGRAL_MAX        1.0f
 #define INTEGRAL_MIN       -1.0f
 
-/* Error dead-zone (rad) — inside this band the motor holds position */
-#define ERROR_THRESHOLD     0.02f   /* rad */
+/* Error dead-zone — 0.1 cm = 0.001 m → 0.001 / PITCH_RADIUS rad */
+#define ERROR_THRESHOLD     0.25f  /* rad ≈ 0.1 cm with 1.9 cm pitch radius */
+
+/* Gear-and-rack geometry */
+#define PITCH_RADIUS        0.019f  /* metres — 1.8 cm pitch radius */
 
 /* Control-loop timing
  *   TIM3:  PSC=8999, ARR=99, APB1×2 = 90 MHz  →  f_timer = 10 kHz, dt = 10 ms
@@ -46,7 +49,6 @@ extern UART_HandleTypeDef huart2;
 #define CONTROL_FREQUENCY   100.0f
 #define TAU                 0.05f
 #define BETAD               0.6065f
-#define BETAF               0.2f
 
 /* UART receive buffer size */
 #define RX_BUFFER_SIZE      32
@@ -56,7 +58,6 @@ extern UART_HandleTypeDef huart2;
 typedef enum {
     MODE_MENU,
     MODE_RECEIVE,
-    MODE_READ_VELOCITY,
     MODE_STOP
 } UARTMode;
 
@@ -100,13 +101,14 @@ void MotorControl_Home(void);
 
 /* ── Optional getters (useful for external logging / debug) ──────────────── */
 float        MotorControl_GetAngle(void);       /* current angle, rad      */
-float        MotorControl_GetAngVel(void);      /* current ang-vel, rad/s  */
 float        MotorControl_GetSetpoint(void);    /* current setpoint, rad   */
+float        MotorControl_GetLinPos(void);      /* current linear pos, m   */
 float        MotorControl_GetControlSignal(void);
 UARTMode     MotorControl_GetMode(void);
 
 /* ── Optional setters ────────────────────────────────────────────────────── */
 void MotorControl_SetSetpoint(float rad);       /* set angle target, rad   */
+void MotorControl_SetLinSetpoint(float metres); /* set linear target, m    */
 void MotorControl_SetGains(float kp, float ki, float kd);
 
 #endif /* MOTOR_CONTROL_H */
