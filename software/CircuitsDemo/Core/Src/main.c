@@ -22,24 +22,18 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include <math.h>
 #include <string.h>
 #include <stdlib.h>
 #include "actuator.h"
+#include "stm32f446xx.h"
+#include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_gpio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef enum{
-  ZONE_LOW, // when encoder count is 0-500
-  ZONE_MID, // when encoder count is 500-2250
-  ZONE_HIGH // when encoder count is 2250-2750
-} CounterZone; // for rotation tracking
-
-typedef enum{
   MODE_MENU,
-  MODE_RECEIVE,
-  MODE_READ_VELOCITY,
   MODE_CW,
   MODE_CCW,
   MODE_ACTUATE,
@@ -61,9 +55,6 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DT 0.1
-
-// other defines
 #define RX_BUFFER_SIZE 32
 /* USER CODE END PD */
 
@@ -73,34 +64,26 @@ typedef struct {
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi2;
+DMA_HandleTypeDef hdma_spi2_tx;
+
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-  // Logic and Reading variables
-  int32_t rotation_count = 0;
-  CounterZone zone_curr = ZONE_MID;
-  CounterZone zone_prev = ZONE_MID;
-  float ang_curr = 0; 
-  float ang_prev = 0;
-  float ang_vel = 0; 
-  uint16_t tick_curr = 0;
-  uint16_t tick_prev = 0;
-  uint16_t count_curr = 0;
-  uint16_t count_prev = 0;
-
-  // Finger actuator pins (update these to match your hardware)
-  // Finger: 1        2        3        4        5
+  // Finger actuator pins
+  // Finger: 1 (SLND1)   2 (SLND2)   3 (SLND3)   4 (SLND4)   5 (SLND5)
   GPIO_Pin_t fingers[5] = {
-    {GPIOB, GPIO_PIN_10},
-    {GPIOB, GPIO_PIN_4},
-    {GPIOB, GPIO_PIN_5},
-    {GPIOB, GPIO_PIN_6},
-    {GPIOB, GPIO_PIN_7}
+    {GPIOC, SLND1_Pin},
+    {GPIOC, SLND2_Pin},
+    {GPIOC, SLND3_Pin},
+    {GPIOC, SLND4_Pin},
+    {GPIOB, SLND5_Pin}
   };
   uint8_t selected_fingers = 0; // bitmask of fingers chosen by "fingers" command
 
@@ -118,23 +101,18 @@ UART_HandleTypeDef huart2;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 
 int _write(int file, char *ptr, int len);
-void PrintValues(void);
-float GetMotorAngle(void);
-float GetMotorAngVel(void);
-void IRRFilderD(float* sigD);
-void IRRFilderF(float* sigF);
-float PID(void);
 void MotorStop(void);
 void MotorCW(uint16_t duty_cycle);
 void MotorCCW(uint16_t duty_cycle);
-void MotorControl(void);
 void ProcessCommand(char *cmd);
 
 /* USER CODE END PFP */
@@ -278,11 +256,6 @@ void ProcessCommand(char *cmd)
         current_mode = MODE_CCW;
         printf("Switched to CCW mode\r\n");
     }
-    else if (strncmp(cmd, "v", 1) == 0)
-    {
-        current_mode = MODE_READ_VELOCITY;
-        printf("Switched to READ VELOCITY mode\r\n");
-    }
     else if (strncmp(cmd, "s", 1) == 0)
     {
         current_mode = MODE_STOP;
@@ -293,41 +266,6 @@ void ProcessCommand(char *cmd)
         printf("Unknown command\r\n");
     }
 }
-
-float GetMotorAngle(){ // tim2 counter period is 2750
-  count_curr = __HAL_TIM_GET_COUNTER(&htim2);
-
-  zone_prev = zone_curr;
-
-  // get current zone
-  if(count_curr <= 500){
-    zone_curr = ZONE_LOW;
-  }
-  else if(count_curr >= 2250){
-    zone_curr = ZONE_HIGH;
-  }
-  else{
-    zone_curr = ZONE_MID;
-  }
-  count_prev = count_curr;
-
-  // if going from high to low add rotation, if low to high subtract rotation
-  if(zone_prev == ZONE_HIGH && zone_curr == ZONE_LOW){
-    rotation_count++;
-  }
-  else if(zone_prev == ZONE_LOW && zone_curr == ZONE_HIGH){
-    rotation_count--;
-  }
-
-  return ((float)rotation_count + ((float)__HAL_TIM_GET_COUNTER(&htim2) / 2750.0)) * 2.0 * M_PI; // rotations + angle
-}
-
-float GetMotorAngVel(){
-    ang_vel = (ang_curr - ang_prev) / DT;
-    return ang_vel;
-}
-
-
 
 void MotorStop(){
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
@@ -401,21 +339,19 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();
   MX_TIM3_Init();
+  MX_I2C1_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  // start the timer in encoder mode
- 
   // start tim1 PWM channels
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
   MotorStop();
 
-  // start tim2 in encoder mode
-  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // set PB12 low
@@ -423,7 +359,14 @@ int main(void)
   Actuator_Init(5, fingers[0], fingers[1], fingers[2], fingers[3], fingers[4]);
 
   Button_Init(&blue_button, GPIOC, GPIO_PIN_13, 20); // initialize blue button with 20ms debounce delay
-    
+
+  while(1){
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+    HAL_Delay(1000);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    HAL_Delay(1000);
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -433,9 +376,6 @@ int main(void)
     if(command_ready){
       ProcessCommand(rx_buffer);
       command_ready = 0;
-    }
-    if(current_mode == MODE_READ_VELOCITY){
-      printf("ang_vel: %.2f\r\n", ang_vel);
     }
     if(current_mode == MODE_CW){
       MotorCW(65535); // CW Max Speed
@@ -453,20 +393,20 @@ int main(void)
         }
         printf("Actuation state: %d\r\n", actuation_state);
         if(actuation_state == 0){
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 0); 
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0); 
+          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 0);
+          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 0);
         }
         if(actuation_state == 1){
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 1); 
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0); 
+          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 1);
+          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 0);
         }
         if(actuation_state == 2){
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 0); 
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 1); 
+          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 0);
+          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 1);
         }
         if(actuation_state == 3){
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, 1); 
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 1); 
+          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 1);
+          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 1);
         }
         
       }
@@ -534,6 +474,78 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+
+  /* USER CODE END SPI2_Init 2 */
+
 }
 
 /**
@@ -616,55 +628,6 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_Encoder_InitTypeDef sConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 2750;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
-  if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
-
-}
-
-/**
   * @brief TIM3 Initialization Function
   * @param None
   * @retval None
@@ -743,6 +706,22 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -761,10 +740,14 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TFT_CS_Pin|TFT_DC_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
+                          |SLND2_Pin|SLND1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|GPIO_PIN_14|SLND5_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -772,15 +755,24 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin TFT_CS_Pin TFT_DC_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|TFT_CS_Pin|TFT_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 PB4 PB5 PB6 PB7 (finger solenoids 1-5) */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+  /*Configure GPIO pins : TFT_RST_Pin SD_CS_Pin SLND4_Pin SLND3_Pin
+                           SLND2_Pin SLND1_Pin */
+  GPIO_InitStruct.Pin = TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
+                          |SLND2_Pin|SLND1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : TFT_BL_Pin PB14 SLND5_Pin */
+  GPIO_InitStruct.Pin = TFT_BL_Pin|GPIO_PIN_14|SLND5_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -792,18 +784,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/* USER CODE BEGIN 4 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM3)  
-    {
-        /* USER CODE BEGIN TIM3_ISR */
-        ang_curr = GetMotorAngle();
-        ang_vel = GetMotorAngVel();
-        ang_prev = ang_curr;
-        /* USER CODE END TIM3_ISR */
-    }
-}
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART2)
