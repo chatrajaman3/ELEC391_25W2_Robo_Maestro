@@ -58,6 +58,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/as5600_position.c
     Core/Src/motor_control.c
+    Core/Src/ili9341.c
+    Core/Src/xpt2046.c
+    Core/Src/menu.c
+    Core/Src/actuator.c
 )
 
 # Add include paths

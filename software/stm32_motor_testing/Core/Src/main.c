@@ -6,8 +6,14 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
 #include "as5600_position.h"
 #include "motor_control.h"
+#include "actuator.h"
+#include "ili9341.h"
+#include "xpt2046.h"
+#include "menu.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -25,8 +31,7 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-SPI_HandleTypeDef hspi2;
-DMA_HandleTypeDef hdma_spi2_tx;
+SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
@@ -34,22 +39,72 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+static const GPIO_Pin_t g_fingers[5] = {
+    {GPIOC, SLND1_Pin},
+    {GPIOC, SLND2_Pin},
+    {GPIOC, SLND3_Pin},
+    {GPIOC, SLND4_Pin},
+    {GPIOB, SLND5_Pin},
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* SPI1 shared byte transfer (LCD + touch share the same bus) */
+static uint8_t spi1_txrx(uint8_t byte)
+{
+    uint8_t rx = 0;
+    HAL_SPI_TransmitReceive(&hspi1, &byte, &rx, 1, HAL_MAX_DELAY);
+    return rx;
+}
+
+/* LCD GPIO */
+static void lcd_set_cs(int v)
+{
+    HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin,
+                      v ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+static void lcd_set_dc(int v)
+{
+    HAL_GPIO_WritePin(TFT_DC_GPIO_Port, TFT_DC_Pin,
+                      v ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+static void lcd_set_rst(int v)
+{
+    HAL_GPIO_WritePin(TFT_RST_GPIO_Port, TFT_RST_Pin,
+                      v ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* Touch GPIO */
+static void tch_set_cs(int v)
+{
+    HAL_GPIO_WritePin(TCH_CS_GPIO_Port, TCH_CS_Pin,
+                      v ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+static int tch_read_irq(void)
+{
+    return HAL_GPIO_ReadPin(TCH_IRQ_GPIO_Port, TCH_IRQ_Pin);
+}
+
+/* Strong definition: drive solenoid finger from the actuators screen */
+void menu_test_finger(int idx, bool on)
+{
+    if (idx < 0 || idx >= 5) return;
+    Actuator_SetState(on ? GPIO_PIN_SET : GPIO_PIN_RESET, 1, g_fingers[idx]);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -65,7 +120,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-    HAL_Init();
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
   /* USER CODE END Init */
@@ -78,24 +133,62 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
-  MX_SPI2_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Deassert all SPI CS pins before driving the bus */
+  lcd_set_cs(1);
+  tch_set_cs(1);
+  HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
+
+  /* Init LCD */
+  ILI9341_Config lcd_cfg = {
+    .spi_txrx = spi1_txrx,
+    .set_cs   = lcd_set_cs,
+    .set_dc   = lcd_set_dc,
+    .set_rst  = lcd_set_rst,
+    .delay_ms = HAL_Delay,
+    .rotation = ROTATION_0,
+  };
+  ili9341_init(&lcd_cfg);
+  HAL_GPIO_WritePin(TFT_BL_GPIO_Port, TFT_BL_Pin, GPIO_PIN_SET);
+
+  /* Init touchscreen */
+  XPT2046_Config tch_cfg = {
+    .spi_txrx = spi1_txrx,
+    .set_cs   = tch_set_cs,
+    .read_irq = tch_read_irq,
+  };
+  xpt2046_init(&tch_cfg);
+  xpt2046_default_cal(ILI9341_WIDTH, ILI9341_HEIGHT);
+
+  /* Init menu */
+  menu_init();
+
+  /* Init solenoid fingers */
+  Actuator_Init(5,
+    g_fingers[0], g_fingers[1], g_fingers[2],
+    g_fingers[3], g_fingers[4]);
+
+  /* Init encoder and motor control */
   AS5600_Init();
   MotorControl_Init();
-  MotorControl_Home();
+  //MotorControl_Home();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE END WHILE */
-    MotorControl_Process();
+
     /* USER CODE BEGIN 3 */
+    MotorControl_Process();   /* handle UART commands + stream telemetry */
+    menu_update();            /* poll touchscreen and update LCD menu     */
   }
   /* USER CODE END 3 */
 }
@@ -186,37 +279,40 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
+  * @brief SPI1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI2_Init(void)
+static void MX_SPI1_Init(void)
 {
 
-  /* USER CODE BEGIN SPI2_Init 0 */
-  /* USER CODE END SPI2_Init 0 */
+  /* USER CODE BEGIN SPI1_Init 0 */
 
-  /* USER CODE BEGIN SPI2_Init 1 */
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
-  /* USER CODE END SPI2_Init 2 */
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -369,22 +465,6 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Stream4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -402,23 +482,24 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TFT_CS_Pin|TFT_DC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, TFT_DC_Pin|TFT_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
                           |SLND2_Pin|SLND1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|SLND5_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|BTN_SEL_Pin
+                          |BTN_NAV_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PC13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  /*Configure GPIO pin : BTN_H_Pin */
+  GPIO_InitStruct.Pin = BTN_H_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_Init(BTN_H_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD2_Pin TFT_CS_Pin TFT_DC_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin|TFT_CS_Pin|TFT_DC_Pin;
+  /*Configure GPIO pins : TFT_DC_Pin TFT_CS_Pin */
+  GPIO_InitStruct.Pin = TFT_DC_Pin|TFT_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -433,12 +514,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : TFT_BL_Pin SLND5_Pin */
-  GPIO_InitStruct.Pin = TFT_BL_Pin|SLND5_Pin;
+  /*Configure GPIO pins : TFT_BL_Pin TCH_CS_Pin SLND5_Pin BTN_SEL_Pin
+                           BTN_NAV_Pin */
+  GPIO_InitStruct.Pin = TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|BTN_SEL_Pin
+                          |BTN_NAV_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : TCH_IRQ_Pin */
+  GPIO_InitStruct.Pin = TCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TCH_IRQ_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* Override PC13 (user button) with internal pull-up so it reads reliably
@@ -447,6 +536,26 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* TCH_CS (PB1) – output, active-low chip select for XPT2046 */
+  GPIO_InitStruct.Pin   = TCH_CS_Pin;
+  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_WritePin(TCH_CS_GPIO_Port, TCH_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_Init(TCH_CS_GPIO_Port, &GPIO_InitStruct);
+
+  /* TCH_IRQ (PB2) – input with pull-up, active-low touch interrupt */
+  GPIO_InitStruct.Pin  = TCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TCH_IRQ_GPIO_Port, &GPIO_InitStruct);
+
+  /* BTN_NAV (PB6) and BTN_SEL (PB5) – inputs with pull-up, active-low */
+  GPIO_InitStruct.Pin  = BTN_NAV_Pin | BTN_SEL_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 

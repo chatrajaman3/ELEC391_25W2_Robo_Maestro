@@ -59,22 +59,26 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define BTN_H_Pin GPIO_PIN_13
+#define BTN_H_GPIO_Port GPIOC
+#define TFT_DC_Pin GPIO_PIN_0
+#define TFT_DC_GPIO_Port GPIOA
+#define TFT_CS_Pin GPIO_PIN_1
+#define TFT_CS_GPIO_Port GPIOA
 #define USART_TX_Pin GPIO_PIN_2
 #define USART_TX_GPIO_Port GPIOA
 #define USART_RX_Pin GPIO_PIN_3
 #define USART_RX_GPIO_Port GPIOA
-#define LD2_Pin GPIO_PIN_5
-#define LD2_GPIO_Port GPIOA
-#define TFT_CS_Pin GPIO_PIN_6
-#define TFT_CS_GPIO_Port GPIOA
-#define TFT_DC_Pin GPIO_PIN_7
-#define TFT_DC_GPIO_Port GPIOA
 #define TFT_RST_Pin GPIO_PIN_4
 #define TFT_RST_GPIO_Port GPIOC
 #define SD_CS_Pin GPIO_PIN_5
 #define SD_CS_GPIO_Port GPIOC
 #define TFT_BL_Pin GPIO_PIN_0
 #define TFT_BL_GPIO_Port GPIOB
+#define TCH_CS_Pin GPIO_PIN_1
+#define TCH_CS_GPIO_Port GPIOB
+#define TCH_IRQ_Pin GPIO_PIN_2
+#define TCH_IRQ_GPIO_Port GPIOB
 #define SLND5_Pin GPIO_PIN_15
 #define SLND5_GPIO_Port GPIOB
 #define SLND4_Pin GPIO_PIN_6
@@ -91,6 +95,10 @@ void Error_Handler(void);
 #define TCK_GPIO_Port GPIOA
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define BTN_SEL_Pin GPIO_PIN_5
+#define BTN_SEL_GPIO_Port GPIOB
+#define BTN_NAV_Pin GPIO_PIN_6
+#define BTN_NAV_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
