@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "as5600_position.h"
+#include "motor_control.h"
+#include "actuator.h"
 #include "ili9341.h"
 #include "sd_spi.h"
 #include "xpt2046.h"
@@ -30,6 +32,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +62,14 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+static const GPIO_Pin_t g_fingers[5] = {
+    {GPIOC, SLND1_Pin},
+    {GPIOC, SLND2_Pin},
+    {GPIOC, SLND3_Pin},
+    {GPIOC, SLND4_Pin},
+    {GPIOB, SLND5_Pin},
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,7 +81,7 @@ static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
-
+void MotorControl_ExtCommand(const char *cmd);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -126,6 +137,13 @@ static int tch_read_irq(void)
 {
     return HAL_GPIO_ReadPin(TCH_IRQ_GPIO_Port, TCH_IRQ_Pin);
 }
+
+/* Strong override: drive solenoid finger from the test screen */
+void menu_test_finger(int idx, bool on)
+{
+    if (idx < 0 || idx >= 5) return;
+    Actuator_SetState(on ? GPIO_PIN_SET : GPIO_PIN_RESET, 1, g_fingers[idx]);
+}
 /* USER CODE END 0 */
 
 /**
@@ -163,13 +181,13 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-  
-  // Deassert all SPI CS pins; hold LCD in hardware reset (draws ~0.1 mA
+
+  // Deassert all SPI CS pins before driving the bus
   lcd_set_cs(1);
   sd_set_cs(1);
   tch_set_cs(1);
 
-  // init lcd
+  // Init LCD 
   ILI9341_Config lcd_cfg = {
     .spi_txrx = spi1_txrx,
     .set_cs   = lcd_set_cs,
@@ -181,7 +199,7 @@ int main(void)
   ili9341_init(&lcd_cfg);
   HAL_GPIO_WritePin(TFT_BL_GPIO_Port, TFT_BL_Pin, GPIO_PIN_SET);
 
-  // init touchscreen
+  // Init touchscreen
   XPT2046_Config tch_cfg = {
     .spi_txrx = spi1_txrx,
     .set_cs   = tch_set_cs,
@@ -191,16 +209,29 @@ int main(void)
   xpt2046_default_cal(ILI9341_WIDTH, ILI9341_HEIGHT);
 
   menu_init();
+
+  // Init solenoid fingers
+  Actuator_Init(5,
+    g_fingers[0], g_fingers[1], g_fingers[2],
+    g_fingers[3], g_fingers[4]);
+
+  // Init AS5600 encoder and motor control (UART CLI + PWM)
+  AS5600_Init();
+  MotorControl_Init();
+
+  // MotorControl_Init() prints the full command menu over UART
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {
+{
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    menu_update();
+    MotorControl_Process();   /* handle UART commands + stream telemetry */
+    menu_update();            /* poll touchscreen and update LCD menu     */
   }
   /* USER CODE END 3 */
 }
@@ -354,7 +385,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 65535;  /* 16-bit max ARR, 180 MHz / 65536 ≈ 2745 Hz PWM */
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -557,6 +588,77 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/* Route TIM3 overflow → motor PID ISR */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM3)
+        MotorControl_TimerISR();
+}
+
+/* Route USART2 RX → motor UART ISR */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+        MotorControl_UartISR();
+}
+
+/* LCD test commands dispatched from motor_control's "unknown command" path */
+void MotorControl_ExtCommand(const char *cmd)
+{
+    if (strncmp(cmd, "lcd ", 4) == 0) {
+        const char *arg = cmd + 4;
+
+        if (strncmp(arg, "clear", 5) == 0) {
+            ili9341_fill_screen(ILI9341_BLACK);
+            printf("LCD cleared\r\n");
+        }
+        else if (strncmp(arg, "fill ", 5) == 0) {
+            const char *color = arg + 5;
+            uint16_t c = ILI9341_BLACK;
+            if      (strncmp(color, "red",     3) == 0) c = ILI9341_RED;
+            else if (strncmp(color, "green",   5) == 0) c = ILI9341_GREEN;
+            else if (strncmp(color, "blue",    4) == 0) c = ILI9341_BLUE;
+            else if (strncmp(color, "white",   5) == 0) c = ILI9341_WHITE;
+            else if (strncmp(color, "yellow",  6) == 0) c = ILI9341_YELLOW;
+            else if (strncmp(color, "cyan",    4) == 0) c = ILI9341_CYAN;
+            else if (strncmp(color, "magenta", 7) == 0) c = ILI9341_MAGENTA;
+            else if (strncmp(color, "orange",  6) == 0) c = ILI9341_ORANGE;
+            else { printf("Unknown color\r\n"); return; }
+            ili9341_fill_screen(c);
+            printf("LCD filled %s\r\n", color);
+        }
+        else if (strncmp(arg, "text ", 5) == 0) {
+            const char *msg = arg + 5;
+            ili9341_fill_screen(ILI9341_BLACK);
+            ili9341_set_text_color(ILI9341_WHITE, ILI9341_BLACK);
+            ili9341_set_font_scale(2);
+            uint16_t tw = ili9341_string_width(msg);
+            ili9341_draw_string((ILI9341_WIDTH - tw) / 2,
+                                (ILI9341_HEIGHT / 2) - 8,
+                                msg);
+            printf("LCD text: %s\r\n", msg);
+        }
+        else if (strncmp(arg, "test", 4) == 0) {
+            /* Colour-bar test pattern: 8 equal horizontal bands */
+            uint16_t colors[] = {
+                ILI9341_RED, ILI9341_GREEN,   ILI9341_BLUE,    ILI9341_YELLOW,
+                ILI9341_CYAN, ILI9341_MAGENTA, ILI9341_WHITE,  ILI9341_ORANGE
+            };
+            uint16_t band = ILI9341_HEIGHT / 8;
+            for (int i = 0; i < 8; i++)
+                ili9341_fill_rect(0, (uint16_t)(i * band),
+                                  ILI9341_WIDTH, band, colors[i]);
+            printf("LCD test pattern drawn\r\n");
+        }
+        else {
+            printf("LCD usage: lcd clear | lcd fill <color> | lcd text <msg> | lcd test\r\n");
+        }
+    }
+    else {
+        printf("Unknown command (type 'help')\r\n");
+    }
+}
 
 /* USER CODE END 4 */
 

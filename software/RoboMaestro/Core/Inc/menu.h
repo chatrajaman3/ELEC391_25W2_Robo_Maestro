@@ -48,6 +48,7 @@ typedef enum {
     SCREEN_SONG_SELECT,
     SCREEN_PLAYING,
     SCREEN_SETTINGS,
+    SCREEN_TEST,
 } ScreenState;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -81,5 +82,14 @@ void menu_draw_main(void);
 void menu_draw_song_select(void);
 void menu_draw_playing(void);
 void menu_draw_settings(void);
+void menu_draw_test(void);
+
+/**
+ * @brief  Weak hook called when a finger toggle button is pressed on the test screen.
+ *         Provide a strong definition in main.c to drive the solenoid GPIO.
+ * @param  idx  Finger index 0-4
+ * @param  on   true = energise, false = de-energise
+ */
+void menu_test_finger(int idx, bool on);
 
 #endif /* MENU_H */

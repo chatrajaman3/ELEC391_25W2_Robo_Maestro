@@ -98,6 +98,19 @@
 #define COLOR_GRAY     0x8410
 #define COLOR_DARKGRAY 0x4208
 
+/* ILI9341_* aliases */
+#define ILI9341_BLACK    COLOR_BLACK
+#define ILI9341_WHITE    COLOR_WHITE
+#define ILI9341_RED      COLOR_RED
+#define ILI9341_GREEN    COLOR_GREEN
+#define ILI9341_BLUE     COLOR_BLUE
+#define ILI9341_YELLOW   COLOR_YELLOW
+#define ILI9341_CYAN     COLOR_CYAN
+#define ILI9341_MAGENTA  COLOR_MAGENTA
+#define ILI9341_ORANGE   COLOR_ORANGE
+#define ILI9341_GRAY     COLOR_GRAY
+#define ILI9341_DARKGRAY COLOR_DARKGRAY
+
 /* ── Screen rotation ────────────────────────────────────────────────────── */
 typedef enum {
     ROTATION_0   = 0,   /* Portrait,  USB at bottom */
