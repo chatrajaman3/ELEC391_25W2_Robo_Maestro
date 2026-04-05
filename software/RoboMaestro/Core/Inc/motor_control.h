@@ -35,8 +35,15 @@ extern UART_HandleTypeDef huart2;
 #define INTEGRAL_MAX        1.0f
 #define INTEGRAL_MIN       -1.0f
 
-/* Error dead-zone — ≈ 0.1 cm with 1.9 cm pitch radius */
-#define ERROR_THRESHOLD     0.25f   /* rad */
+/* Error dead-zone with hysteresis to prevent limit-cycle vibration.
+ * Motor stops when error < THRESHOLD_OFF, stays stopped until error > THRESHOLD_ON. */
+#define ERROR_THRESHOLD_OFF  0.25f  /* rad — stop motor when inside this band  */
+#define ERROR_THRESHOLD_ON   0.40f  /* rad — restart motor when outside this   */
+
+/* Static-friction kickstart: apply max PWM for this many control ticks when
+ * transitioning from stopped to moving, to overcome stiction.
+ * At 100 Hz control rate, 10 ticks = 100 ms. */
+#define KICKSTART_TICKS      10
 
 /* Gear-and-rack geometry */
 #define PITCH_RADIUS        0.019f  /* metres — 1.9 cm pitch radius */

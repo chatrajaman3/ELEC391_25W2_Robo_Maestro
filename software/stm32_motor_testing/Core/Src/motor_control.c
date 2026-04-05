@@ -23,6 +23,8 @@ static float   ang_curr    = 0.0f;
 static float   ang_prev    = 0.0f;
 static float   lin_pos     = 0.0f;    /* metres */
 static int64_t home_offset = 0;       /* encoder ticks at home */
+static uint8_t  motor_active = 0;           /* hysteresis state: 1=driving, 0=stopped */
+static uint8_t  kickstart_remaining = 0;    /* ticks left in static-friction burst    */
 
 static float Kp = 2000.0f;
 static float Ki = 1000.0f;
@@ -216,7 +218,7 @@ static float PID_Compute(void)
 {
     err = ang_set - ang_curr;
 
-    if (fabsf(err) < ERROR_THRESHOLD) {
+    if (!motor_active && fabsf(err) < ERROR_THRESHOLD_ON) {
         err      = 0.0f;
         integral = 0.0f;
     }
@@ -244,10 +246,26 @@ static void MotorDrive(void)
 {
     float sig = PID_Compute();
 
-    if (fabsf(err) < ERROR_THRESHOLD) {
+    /* Hysteresis: stop when inside OFF band, only restart when outside ON band */
+    if (motor_active && fabsf(err) < ERROR_THRESHOLD_OFF) {
+        motor_active = 0;
+        kickstart_remaining = 0;
         actual_pwm = 0.0f;
         MotorStop();
         return;
+    }
+    if (!motor_active && fabsf(err) < ERROR_THRESHOLD_ON) {
+        actual_pwm = 0.0f;
+        return;
+    }
+    if (!motor_active)
+        kickstart_remaining = KICKSTART_TICKS;
+    motor_active = 1;
+
+    /* Kickstart: override PID with max output for the first N ticks to break stiction */
+    if (kickstart_remaining > 0) {
+        kickstart_remaining--;
+        sig = (sig >= 0.0f) ? PID_ABS_MAX_OUTPUT : -PID_ABS_MAX_OUTPUT;
     }
 
     if (sig > 0.0f) {
