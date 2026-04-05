@@ -18,296 +18,58 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include "actuator.h"
-#include "stm32f446xx.h"
+#include "as5600_position.h"
+#include "motor_control.h"
 #include "stm32f4xx_hal.h"
-#include "stm32f4xx_hal_gpio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum{
-  MODE_MENU,
-  MODE_CW,
-  MODE_CCW,
-  MODE_ACTUATE,
-  MODE_STOP,
-  MODE_FINGER_ONOFF  // waiting for "on" or "off" after "fingers" command
-} UARTMode;
-
-typedef struct {
-    GPIO_TypeDef *port;
-    uint16_t pin;
-
-    uint8_t last_reading;
-    uint8_t stable_state;
-
-    uint32_t last_debounce_time;
-    uint32_t debounce_delay;
-} Button_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RX_BUFFER_SIZE 32
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-SPI_HandleTypeDef hspi2;
-DMA_HandleTypeDef hdma_spi2_tx;
+SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
 
-UART_HandleTypeDef huart2;
-
 /* USER CODE BEGIN PV */
-
-  // Finger actuator pins
-  // Finger: 1 (SLND1)   2 (SLND2)   3 (SLND3)   4 (SLND4)   5 (SLND5)
-  GPIO_Pin_t fingers[5] = {
+static const GPIO_Pin_t g_fingers[5] = {
     {GPIOC, SLND1_Pin},
     {GPIOC, SLND2_Pin},
     {GPIOC, SLND3_Pin},
     {GPIOC, SLND4_Pin},
-    {GPIOB, SLND5_Pin}
-  };
-  uint8_t selected_fingers = 0; // bitmask of fingers chosen by "fingers" command
-
-  // other variables
-  uint8_t rx_char;
-  char rx_buffer[RX_BUFFER_SIZE];
-  uint8_t rx_index = 0;
-  volatile uint8_t command_ready = 0;
-  UARTMode current_mode = MODE_MENU;
-  uint8_t actuation_state = 0;
-  Button_t blue_button;
-
+    {GPIOB, SLND5_Pin},
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
-
-int _write(int file, char *ptr, int len);
-void MotorStop(void);
-void MotorCW(uint16_t duty_cycle);
-void MotorCCW(uint16_t duty_cycle);
-void ProcessCommand(char *cmd);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-void Button_Init(Button_t *btn, GPIO_TypeDef *port, uint16_t pin, uint32_t debounce_delay)
-{
-    btn->port = port;
-    btn->pin = pin;
-    btn->debounce_delay = debounce_delay;
-
-    btn->last_reading = HAL_GPIO_ReadPin(port, pin);
-    btn->stable_state = btn->last_reading;
-    btn->last_debounce_time = 0;
-}
-
-// this function redirects printf output to UART2
-int _write(int file, char *ptr, int len)
-{
-    HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
-    return len;
-}
-
-void ProcessCommand(char *cmd)
-{
-    // 'm' returns to menu from any mode
-    if (current_mode != MODE_MENU && strncmp(cmd, "m", 1) == 0)
-    {
-        current_mode = MODE_MENU;
-        printf("Switched to MENU mode\r\n");
-        return;
-    }
-
-    // Waiting for "on" or "off" after a "fingers" command
-    if (current_mode == MODE_FINGER_ONOFF)
-    {
-        if (strncmp(cmd, "on", 2) == 0)
-        {
-            for (int i = 0; i < 5; i++) {
-                if (selected_fingers & (1 << i))
-                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_SET);
-            }
-            printf("Fingers ON\r\n");
-        }
-        else if (strncmp(cmd, "off", 3) == 0)
-        {
-            for (int i = 0; i < 5; i++) {
-                if (selected_fingers & (1 << i))
-                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
-            }
-            printf("Fingers OFF\r\n");
-        }
-        else
-        {
-            printf("Type 'on', 'off', or 'm' for menu\r\n");
-            return;
-        }
-        current_mode = MODE_MENU;
-        return;
-    }
-
-    // Menu-mode commands
-    if (strncmp(cmd, "fingers", 7) == 0)
-    {
-        char *p = cmd + 7;
-        char *endptr;
-        selected_fingers = 0;
-        int8_t state = -1; // -1 = not set, 0 = off, 1 = on
-
-        while (*p)
-        {
-            // skip spaces
-            while (*p == ' ') p++;
-            if (*p == '\0') break;
-
-            // try to parse as a number first
-            long n = strtol(p, &endptr, 10);
-            if (endptr != p)
-            {
-                if (n >= 1 && n <= 5) selected_fingers |= (1 << (n - 1));
-                p = endptr;
-            }
-            else
-            {
-                // not a number — check for "on" or "off"
-                if (strncmp(p, "on", 2) == 0 && (p[2] == ' ' || p[2] == '\0'))
-                {
-                    state = 1;
-                    p += 2;
-                }
-                else if (strncmp(p, "off", 3) == 0 && (p[3] == ' ' || p[3] == '\0'))
-                {
-                    state = 0;
-                    p += 3;
-                }
-                else
-                {
-                    // skip unknown token
-                    while (*p && *p != ' ') p++;
-                }
-            }
-        }
-
-        if (selected_fingers == 0)
-        {
-            printf("No valid fingers (1-5). Usage: fingers 1 2 3 on\r\n");
-        }
-        else if (state == -1)
-        {
-            // no on/off provided — store selection and prompt
-            printf("Selected fingers:");
-            for (int i = 0; i < 5; i++) {
-                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
-            }
-            printf("\r\nTurn on or off? (on/off): ");
-            current_mode = MODE_FINGER_ONOFF;
-        }
-        else
-        {
-            GPIO_PinState pin_state = (state == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-            for (int i = 0; i < 5; i++) {
-                if (selected_fingers & (1 << i))
-                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, pin_state);
-            }
-            printf("Fingers");
-            for (int i = 0; i < 5; i++) {
-                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
-            }
-            printf(" %s\r\n", (state == 1) ? "ON" : "OFF");
-        }
-    }
-    else if (strncmp(cmd, "cw", 2) == 0)
-    {
-        current_mode = MODE_CW;
-        printf("Switched to CW mode\r\n");
-    }
-    else if (strncmp(cmd, "ccw", 3) == 0)
-    {
-        current_mode = MODE_CCW;
-        printf("Switched to CCW mode\r\n");
-    }
-    else if (strncmp(cmd, "s", 1) == 0)
-    {
-        current_mode = MODE_STOP;
-        printf("Switched to STOP mode\r\n");
-    }
-    else
-    {
-        printf("Unknown command\r\n");
-    }
-}
-
-void MotorStop(){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
-}
-
-void MotorCW(uint16_t duty_cycle){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty_cycle); // set duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 0% duty cycle
-}
-void MotorCCW(uint16_t duty_cycle){
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 0% duty cycle
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle); // set duty cycle
-}
-uint8_t Button_Update(Button_t *btn)
-{
-	uint8_t reading = HAL_GPIO_ReadPin(btn->port, btn->pin);
-
-	if(reading != btn->last_reading)
-	{
-		btn->last_debounce_time = HAL_GetTick();
-	}
-
-	if((HAL_GetTick() - btn->last_debounce_time) > btn->debounce_delay)
-	{
-		if(reading != btn->stable_state)
-		{
-			btn->stable_state = reading;
-
-			if(btn->stable_state == GPIO_PIN_RESET)
-			{
-				btn->last_reading = reading;
-				return 1;
-			}
-		}
-	}
-
-	btn->last_reading = reading;
-	return 0;
-}
-
-
 /* USER CODE END 0 */
 
 /**
@@ -318,7 +80,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -327,97 +88,48 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_TIM1_Init();
-  MX_USART2_UART_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
-  MX_SPI2_Init();
+  MX_SPI1_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-  // start tim1 PWM channels
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
-  MotorStop();
+  /* Init solenoid fingers */
+  Actuator_Init(5,
+    g_fingers[0], g_fingers[1], g_fingers[2],
+    g_fingers[3], g_fingers[4]);
 
-  HAL_UART_Receive_IT(&huart2, &rx_char, 1);
+  /* Init encoder */
+  AS5600_Init();
+
+  /* Init motor control (starts PWM, arms UART interrupt, prints menu) */
+  MotorControl_Init();
   
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET); // set PB12 low
-
-  Actuator_Init(5, fingers[0], fingers[1], fingers[2], fingers[3], fingers[4]);
-
-  Button_Init(&blue_button, GPIOC, GPIO_PIN_13, 20); // initialize blue button with 20ms debounce delay
-
-  while(1){
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-    HAL_Delay(1000);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-    HAL_Delay(1000);
-  }
-
+  /* Home the carriage, then immediately start playing the song */
+  //MotorControl_SetTestSwitch();
+  MotorControl_Home();
+  MotorControl_PlaySong();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    if(command_ready){
-      ProcessCommand(rx_buffer);
-      command_ready = 0;
-    }
-    if(current_mode == MODE_CW){
-      MotorCW(65535); // CW Max Speed
-      current_mode = MODE_MENU;
-    }
-    if(current_mode == MODE_CCW){
-      MotorCCW(65535); // CCW Max Speed
-      current_mode = MODE_MENU;
-    }
-    if(current_mode == MODE_ACTUATE){
-      if(Button_Update(&blue_button)){ // if blue button is pressed
-        actuation_state++;
-        if(actuation_state == 4){
-          actuation_state = 0;
-        }
-        printf("Actuation state: %d\r\n", actuation_state);
-        if(actuation_state == 0){
-          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 0);
-          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 0);
-        }
-        if(actuation_state == 1){
-          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 1);
-          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 0);
-        }
-        if(actuation_state == 2){
-          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 0);
-          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 1);
-        }
-        if(actuation_state == 3){
-          HAL_GPIO_WritePin(SLND1_GPIO_Port, SLND1_Pin, 1);
-          HAL_GPIO_WritePin(SLND2_GPIO_Port, SLND2_Pin, 1);
-        }
-        
-      }
-    }
-    if(current_mode == MODE_STOP){
-      MotorStop();
-    }
-
+  while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    MotorControl_Process();   /* handle PID + song sequencer */
+
   }
   /* USER CODE END 3 */
 }
@@ -439,12 +151,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 180;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 2;
@@ -511,40 +222,40 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
+  * @brief SPI1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI2_Init(void)
+static void MX_SPI1_Init(void)
 {
 
-  /* USER CODE BEGIN SPI2_Init 0 */
+  /* USER CODE BEGIN SPI1_Init 0 */
 
-  /* USER CODE END SPI2_Init 0 */
+  /* USER CODE END SPI1_Init 0 */
 
-  /* USER CODE BEGIN SPI2_Init 1 */
+  /* USER CODE BEGIN SPI1_Init 1 */
 
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
+  /* USER CODE BEGIN SPI1_Init 2 */
 
-  /* USER CODE END SPI2_Init 2 */
+  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -571,7 +282,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 8999;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -673,55 +384,6 @@ static void MX_TIM3_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART2_Init 0 */
-
-  /* USER CODE END USART2_Init 0 */
-
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Stream4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -740,23 +402,24 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LD2_Pin|TFT_CS_Pin|TFT_DC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, TFT_DC_Pin|TFT_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, TFT_RST_Pin|SD_CS_Pin|SLND4_Pin|SLND3_Pin
                           |SLND2_Pin|SLND1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|GPIO_PIN_14|SLND5_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|ENBL1_Pin
+                          |ENBL2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PC13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  /*Configure GPIO pin : BTN_H_Pin */
+  GPIO_InitStruct.Pin = BTN_H_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_Init(BTN_H_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD2_Pin TFT_CS_Pin TFT_DC_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin|TFT_CS_Pin|TFT_DC_Pin;
+  /*Configure GPIO pins : TFT_DC_Pin TFT_CS_Pin */
+  GPIO_InitStruct.Pin = TFT_DC_Pin|TFT_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -771,53 +434,40 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : TFT_BL_Pin PB14 SLND5_Pin */
-  GPIO_InitStruct.Pin = TFT_BL_Pin|GPIO_PIN_14|SLND5_Pin;
+  /*Configure GPIO pins : TFT_BL_Pin TCH_CS_Pin SLND5_Pin ENBL1_Pin
+                           ENBL2_Pin */
+  GPIO_InitStruct.Pin = TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|ENBL1_Pin
+                          |ENBL2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : TCH_IRQ_Pin */
+  GPIO_InitStruct.Pin = TCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TCH_IRQ_GPIO_Port, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* BTN_H (PC13, blue button) — input with pull-up, active-low */
+  GPIO_InitStruct.Pin  = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (huart->Instance == USART2)
+    if (htim->Instance == TIM3)
     {
-        HAL_UART_Transmit(&huart2, &rx_char, 1, HAL_MAX_DELAY);
-        // Detect end of command
-        if (rx_char == '\r' || rx_char == '\n')
-        {
-            if (rx_index > 0)   // Ignore empty ENTER presses
-            {
-                rx_buffer[rx_index] = '\0';   // Null terminate string
-                command_ready = 1;
-                rx_index = 0;
-            }
-        }
-        else
-        {
-            // Store received character if buffer not full
-            if (rx_index < RX_BUFFER_SIZE - 1)
-            {
-                rx_buffer[rx_index++] = rx_char;
-            }
-            else
-            {
-                // Buffer overflow protection
-                rx_index = 0;
-            }
-        }
-
-        // Re-arm UART interrupt (VERY IMPORTANT)
-        HAL_UART_Receive_IT(&huart2, &rx_char, 1);
+        MotorControl_TimerISR();   /* reads encoder, runs PID, drives motor */
     }
 }
-    
 
 /* USER CODE END 4 */
 
@@ -828,7 +478,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
@@ -846,8 +495,6 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

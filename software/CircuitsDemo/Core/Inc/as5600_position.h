@@ -79,8 +79,6 @@ void AS5600_ResetPosition(void);
  */
 bool AS5600_IsMagnetDetected(void);
 
-void AS5600_PrintMagnetStatus(void);
-
 /* External I²C handle (defined by CubeMX in main.c) */
 extern I2C_HandleTypeDef AS5600_I2C_HANDLE;
 
