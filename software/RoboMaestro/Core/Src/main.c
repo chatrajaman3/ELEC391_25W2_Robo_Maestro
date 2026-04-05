@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -180,6 +181,7 @@ int main(void)
   MX_TIM3_Init();
   MX_I2C1_Init();
   MX_SPI1_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
 
   // Deassert all SPI CS pins before driving the bus
@@ -253,12 +255,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 180;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 2;
@@ -385,7 +386,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;  /* 16-bit max ARR, 180 MHz / 65536 ≈ 2745 Hz PWM */
+  htim1.Init.Period = 8999;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -545,7 +546,8 @@ static void MX_GPIO_Init(void)
                           |SLND2_Pin|SLND1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|ENBL1_Pin
+                          |ENBL2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : BTN_H_Pin */
   GPIO_InitStruct.Pin = BTN_H_Pin;
@@ -569,8 +571,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : TFT_BL_Pin TCH_CS_Pin SLND5_Pin */
-  GPIO_InitStruct.Pin = TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin;
+  /*Configure GPIO pins : TFT_BL_Pin TCH_CS_Pin SLND5_Pin ENBL1_Pin
+                           ENBL2_Pin */
+  GPIO_InitStruct.Pin = TFT_BL_Pin|TCH_CS_Pin|SLND5_Pin|ENBL1_Pin
+                          |ENBL2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
