@@ -95,10 +95,10 @@ void Error_Handler(void);
 #define TCK_GPIO_Port GPIOA
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
-#define BTN_SEL_Pin GPIO_PIN_5
-#define BTN_SEL_GPIO_Port GPIOB
-#define BTN_NAV_Pin GPIO_PIN_6
-#define BTN_NAV_GPIO_Port GPIOB
+#define ENBL1_Pin GPIO_PIN_5
+#define ENBL1_GPIO_Port GPIOB
+#define ENBL2_Pin GPIO_PIN_6
+#define ENBL2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

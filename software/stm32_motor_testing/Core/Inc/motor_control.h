@@ -24,7 +24,7 @@ extern UART_HandleTypeDef huart2;
 /* ── Configuration macros ────────────────────────────────────────────────── */
 
 /* PID output limits (maps directly to TIM1 ARR = 65535, f_PWM = 2.75 kHz) */
-#define PID_ABS_MIN_OUTPUT  65535.0f  /* minimum duty when actively driving  */
+#define PID_ABS_MIN_OUTPUT  35535.0f  /* minimum duty when actively driving  */
 #define PID_ABS_MAX_OUTPUT  65535.0f  /* hard ceiling = ARR                  */
 
 /* Dead time inserted between direction changes to prevent H-bridge shoot-through.

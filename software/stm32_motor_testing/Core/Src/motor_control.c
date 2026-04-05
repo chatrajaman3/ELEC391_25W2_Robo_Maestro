@@ -24,9 +24,9 @@ static float   ang_prev    = 0.0f;
 static float   lin_pos     = 0.0f;    /* metres */
 static int64_t home_offset = 0;       /* encoder ticks at home */
 
-static float Kp = 50000.0f;
-static float Ki = 10000.0f;
-static float Kd = 15000.0f;
+static float Kp = 2000.0f;
+static float Ki = 1000.0f;
+static float Kd = 500.0f;
 
 static float err            = 0.0f;
 static float integral       = 0.0f;
@@ -147,34 +147,49 @@ static void PrintPIDMenu(void)
 
 static void MotorStop(void)
 {
+    /* Kill both PWMs first, then deassert both enables (active-low → SET = OFF) */
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+    HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_SET);  /* N_EN_P1=1, P1 OFF */
+    HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_SET);  /* N_EN_P2=1, P2 OFF */
     current_dir = DIR_STOP;
 }
 
+/* CW: P1 ON (ENBL1 LOW), N2 driven by CH2.  P2 OFF, CH1=0. */
 static void MotorCW(uint16_t duty)
 {
     if (current_dir == DIR_CCW) {
-        /* Switching direction: zero both channels and wait before driving */
+        /* Safe reversal: kill PWMs, disable both P-sides, wait dead time */
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+        HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_SET);
         HAL_Delay(MOTOR_DEADTIME_MS);
     }
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty);
+    /* Apply CW: CH1=0, P2 OFF, then P1 ON, then CH2=duty */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);              /* PWM_1 = 0 (N1 off) */
+    HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_SET);  /* N_EN_P2=1, P2 OFF  */
+    HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_RESET);/* N_EN_P1=0, P1 ON   */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty);           /* PWM_2 = duty (N2)  */
     current_dir = DIR_CW;
 }
 
+/* CCW: P2 ON (ENBL2 LOW), N1 driven by CH1.  P1 OFF, CH2=0. */
 static void MotorCCW(uint16_t duty)
 {
     if (current_dir == DIR_CW) {
-        /* Switching direction: zero both channels and wait before driving */
+        /* Safe reversal: kill PWMs, disable both P-sides, wait dead time */
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+        HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_SET);
         HAL_Delay(MOTOR_DEADTIME_MS);
     }
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty);
+    /* Apply CCW: CH2=0, P1 OFF, then P2 ON, then CH1=duty */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);              /* PWM_2 = 0 (N2 off) */
+    HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_SET);  /* N_EN_P1=1, P1 OFF  */
+    HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_RESET);/* N_EN_P2=0, P2 ON   */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty);           /* PWM_1 = duty (N1)  */
     current_dir = DIR_CCW;
 }
 
@@ -468,9 +483,16 @@ static void ProcessCommand(char *cmd)
 
 void MotorControl_Init(void)
 {
+    /* Start both PWM channels before asserting any enables */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
+    /* Ensure enables start HIGH (active-low → HIGH = P-side OFF) */
+    HAL_GPIO_WritePin(ENBL1_GPIO_Port, ENBL1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(ENBL2_GPIO_Port, ENBL2_Pin, GPIO_PIN_SET);
+
     MotorStop();
+
     HAL_UART_Receive_IT(&huart2, &rx_char, 1);
     PrintMainMenu();
 }
@@ -631,6 +653,8 @@ void MotorControl_UartISR(void)
 void MotorControl_Home(void)
 {
     MotorCCW(65535);
+    HAL_Delay(1000);
+    MotorCCW(25535);
     while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
     HAL_Delay(20);
     MotorStop();
