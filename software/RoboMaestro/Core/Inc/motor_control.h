@@ -1,13 +1,11 @@
 /**
  * @file    motor_control.h
- * @brief   Motor PID control, angle reading, and UART command processing
- *          for STM32 + AS5600 magnetic encoder.
+ * @brief   Motor PID control and angle reading for STM32 + AS5600 magnetic encoder.
  *
  * Usage:
  *   1. Call MotorControl_Init() once after all HAL peripherals are ready.
  *   2. Call MotorControl_Process() from your main loop.
  *   3. Call MotorControl_TimerISR() from HAL_TIM_PeriodElapsedCallback (TIM3).
- *   4. Call MotorControl_UartISR() from HAL_UART_RxCpltCallback (USART2).
  */
 
 #ifndef MOTOR_CONTROL_H
@@ -24,9 +22,8 @@ extern UART_HandleTypeDef huart2;
 /* ── Configuration macros ────────────────────────────────────────────────── */
 
 /* PID output limits (maps directly to TIM1 ARR = 65535, f_PWM = 2.75 kHz) */
-#define PID_ABS_MIN_OUTPUT  35535.0f  /* minimum duty when actively driving  */
-#define PID_ABS_MAX_OUTPUT  65535.0f  /* hard ceiling = ARR                  */
-
+#define PID_ABS_MIN_OUTPUT  6000.0f  /* minimum duty when actively driving  */
+#define PID_ABS_MAX_OUTPUT  8998.0f  /* hard ceiling = ARR                  */
 /* Dead time inserted between direction changes to prevent H-bridge shoot-through.
  * Both channels are forced to 0 for this many ms before the new direction is applied. */
 #define MOTOR_DEADTIME_MS   1
@@ -42,7 +39,7 @@ extern UART_HandleTypeDef huart2;
 
 /* Static-friction kickstart: apply max PWM for this many control ticks when
  * transitioning from stopped to moving, to overcome stiction.
- * At 100 Hz control rate, 10 ticks = 100 ms. */
+ * At 100 Hz control rate, 5 ticks = 50 ms. */
 #define KICKSTART_TICKS      10
 
 /* Gear-and-rack geometry */
@@ -57,9 +54,6 @@ extern UART_HandleTypeDef huart2;
 #define CONTROL_FREQUENCY   100.0f
 #define TAU                 0.05f
 #define BETAD               0.6065f
-
-/* UART receive buffer size */
-#define RX_BUFFER_SIZE      64
 
 /* ── Mode enum ───────────────────────────────────────────────────────────── */
 
@@ -84,10 +78,13 @@ typedef enum {
 
 /* Convenience checks */
 #define IS_TEST_MODE(m) ((m) >= MODE_TEST_IDLE  && (m) <= MODE_TEST_ACTUATE)
+#define IS_PID_MODE(m)  ((m) >= MODE_PID_IDLE   && (m) <= MODE_PID_STOP)
 
 /* Interval between direction changes in switching test mode (ms) */
 #define MOTOR_SWITCH_INTERVAL_MS  300
-#define IS_PID_MODE(m)  ((m) >= MODE_PID_IDLE   && (m) <= MODE_PID_STOP)
+
+/* UART receive buffer size */
+#define RX_BUFFER_SIZE  64
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
@@ -111,14 +108,14 @@ void MotorControl_SetLinSetpoint(float metres);
 void MotorControl_SetGains(float kp, float ki, float kd);
 void MotorControl_PlaySong(void);
 
-/* Open-loop test controls (for LCD test screen) */
+/* Open-loop test controls */
 void MotorControl_SetTestStop(void);
 void MotorControl_SetTestCW(void);
 void MotorControl_SetTestCCW(void);
 void MotorControl_SetTestSwitch(void);
 
 /**
- * @brief  Weak hook for commands not handled by motor_control (e.g. lcd).
+ * @brief  Weak hook for commands not handled by motor_control.
  *         Only called from test mode.  Define a strong version in main.c.
  */
 void MotorControl_ExtCommand(const char *cmd);

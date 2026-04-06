@@ -362,6 +362,11 @@ void menu_init(void)
 
 void menu_update(void)
 {
+    /* Suppress all SPI activity during active PID to avoid blocking the control loop */
+    UARTMode mode = MotorControl_GetMode();
+    if (mode == MODE_PID_ACTIVE || mode == MODE_PID_RECEIVE)
+        return;
+
     /* 1. Read touch */
     TouchPoint tp = {0};
     xpt2046_read(&tp);

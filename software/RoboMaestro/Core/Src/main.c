@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -26,14 +25,11 @@
 #include "motor_control.h"
 #include "actuator.h"
 #include "ili9341.h"
-#include "sd_spi.h"
 #include "xpt2046.h"
 #include "menu.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -88,11 +84,6 @@ void MotorControl_ExtCommand(const char *cmd);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// UART debug print
-static void uprint(const char *s) {
-    HAL_UART_Transmit(&huart2, (uint8_t*)s, strlen(s), HAL_MAX_DELAY);
-}
-
 // SPI1 Shared for LCD, Touchscreen
 static uint8_t spi1_txrx(uint8_t byte)
 {
@@ -118,13 +109,6 @@ static void lcd_set_rst(int v)
 {
     if (v) HAL_GPIO_WritePin(TFT_RST_GPIO_Port, TFT_RST_Pin, GPIO_PIN_SET);
     else   HAL_GPIO_WritePin(TFT_RST_GPIO_Port, TFT_RST_Pin, GPIO_PIN_RESET);
-}
-
-// SD Card GPIO
-static void sd_set_cs(int v)
-{
-    if (v) HAL_GPIO_WritePin(SD_CS_GPIO_Port,  SD_CS_Pin, GPIO_PIN_SET);
-    else   HAL_GPIO_WritePin(SD_CS_GPIO_Port,  SD_CS_Pin, GPIO_PIN_RESET);
 }
 
 // Touch Screen GPIO
@@ -181,12 +165,10 @@ int main(void)
   MX_TIM3_Init();
   MX_I2C1_Init();
   MX_SPI1_Init();
-  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
 
   // Deassert all SPI CS pins before driving the bus
   lcd_set_cs(1);
-  sd_set_cs(1);
   tch_set_cs(1);
 
   // Init LCD 
@@ -615,7 +597,6 @@ void MotorControl_ExtCommand(const char *cmd)
 
         if (strncmp(arg, "clear", 5) == 0) {
             ili9341_fill_screen(ILI9341_BLACK);
-            printf("LCD cleared\r\n");
         }
         else if (strncmp(arg, "fill ", 5) == 0) {
             const char *color = arg + 5;
@@ -628,9 +609,8 @@ void MotorControl_ExtCommand(const char *cmd)
             else if (strncmp(color, "cyan",    4) == 0) c = ILI9341_CYAN;
             else if (strncmp(color, "magenta", 7) == 0) c = ILI9341_MAGENTA;
             else if (strncmp(color, "orange",  6) == 0) c = ILI9341_ORANGE;
-            else { printf("Unknown color\r\n"); return; }
+            else return;
             ili9341_fill_screen(c);
-            printf("LCD filled %s\r\n", color);
         }
         else if (strncmp(arg, "text ", 5) == 0) {
             const char *msg = arg + 5;
@@ -641,7 +621,6 @@ void MotorControl_ExtCommand(const char *cmd)
             ili9341_draw_string((ILI9341_WIDTH - tw) / 2,
                                 (ILI9341_HEIGHT / 2) - 8,
                                 msg);
-            printf("LCD text: %s\r\n", msg);
         }
         else if (strncmp(arg, "test", 4) == 0) {
             /* Colour-bar test pattern: 8 equal horizontal bands */
@@ -653,14 +632,7 @@ void MotorControl_ExtCommand(const char *cmd)
             for (int i = 0; i < 8; i++)
                 ili9341_fill_rect(0, (uint16_t)(i * band),
                                   ILI9341_WIDTH, band, colors[i]);
-            printf("LCD test pattern drawn\r\n");
         }
-        else {
-            printf("LCD usage: lcd clear | lcd fill <color> | lcd text <msg> | lcd test\r\n");
-        }
-    }
-    else {
-        printf("Unknown command (type 'help')\r\n");
     }
 }
 

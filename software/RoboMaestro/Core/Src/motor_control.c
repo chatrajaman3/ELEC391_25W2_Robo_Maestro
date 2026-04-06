@@ -44,28 +44,15 @@ static MotorDir current_dir = DIR_STOP;
 /* Song sequencer ----------------------------------------------------------- */
 typedef struct { float pos_cm; uint32_t dur_ms; } SongNote;
 
-/* Twinkle Twinkle Little Star — white-key positions at 2.3 cm per key,
- * C4 = 0 cm, D=2.3, E=4.6, F=6.9, G=9.2, A=11.5
- * Quarter note = 500 ms (120 BPM), half note = 1000 ms                    */
 static const SongNote song_notes[] = {
-    /* C  C  G  G  A  A  G(half)  */
-    { 0.0f,  500}, { 0.0f,  500}, { 9.2f,  500}, { 9.2f,  500},
-    {11.5f,  500}, {11.5f,  500}, { 9.2f, 1000},
-    /* F  F  E  E  D  D  C(half)  */
-    { 6.9f,  500}, { 6.9f,  500}, { 4.6f,  500}, { 4.6f,  500},
-    { 2.3f,  500}, { 2.3f,  500}, { 0.0f, 1000},
-    /* G  G  F  F  E  E  D(half)  */
-    { 9.2f,  500}, { 9.2f,  500}, { 6.9f,  500}, { 6.9f,  500},
-    { 4.6f,  500}, { 4.6f,  500}, { 2.3f, 1000},
-    /* G  G  F  F  E  E  D(half)  */
-    { 9.2f,  500}, { 9.2f,  500}, { 6.9f,  500}, { 6.9f,  500},
-    { 4.6f,  500}, { 4.6f,  500}, { 2.3f, 1000},
-    /* C  C  G  G  A  A  G(half)  */
-    { 0.0f,  500}, { 0.0f,  500}, { 9.2f,  500}, { 9.2f,  500},
-    {11.5f,  500}, {11.5f,  500}, { 9.2f, 1000},
-    /* F  F  E  E  D  D  C(half)  */
-    { 6.9f,  500}, { 6.9f,  500}, { 4.6f,  500}, { 4.6f,  500},
-    { 2.3f,  500}, { 2.3f,  500}, { 0.0f, 1000},
+    { 0.0f,  1000}, { 10.0f,  2000}, { 20.0f,  2000},
+    {30.0f,  2000}, {10.0f,  2000}, { 7.0f, 2000},
+    { 10.0f,  1000}, { 12.0f,  1000},
+    { 14.0f,  1000}, { 16.0f,  1000},
+    { 18.0f,  1000}, { 20.0f,  1000}, { 22.0f, 2000},
+    { 9.0f,  1000}, { 9.0f,  1000},
+    { 6.0f,  1000}, { 6.0f,  1000},
+    { 2.0f,  1000}, { 2.0f,  1000}, { 2.0f, 2000},
 };
 #define SONG_NUM_NOTES  (sizeof(song_notes) / sizeof(song_notes[0]))
 
@@ -95,59 +82,6 @@ static const GPIO_Pin_t fingers[5] = {
 };
 static uint8_t selected_fingers = 0;
 static uint8_t actuate_state    = 0; /* 0=all off, 1-5=each finger, 6=all on */
-
-/* ── Printf redirect ─────────────────────────────────────────────────────── */
-
-int _write(int file, char *ptr, int len)
-{
-    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
-    return len;
-}
-
-/* ── Menu printers ───────────────────────────────────────────────────────── */
-
-static void PrintMainMenu(void)
-{
-    printf("\r\n=== RoboMaestro ===\r\n");
-    printf("  test  - Open-loop motor, actuators, sensor, LCD\r\n");
-    printf("  pid   - Position control (set, stream, stop)\r\n");
-    printf("  help  - Show this menu\r\n");
-    printf("===================\r\n\r\n");
-}
-
-static void PrintTestMenu(void)
-{
-    printf("\r\n=== Test Mode ===\r\n");
-    printf("  cw                   - Open-loop CW at max speed\r\n");
-    printf("  ccw                  - Open-loop CCW at max speed\r\n");
-    printf("  s                    - Stop motor\r\n");
-    printf("  fingers <n> [on|off] - e.g. 'fingers 1 2 3 on'\r\n");
-    printf("  actuate              - Cycle solenoids with blue button (s to stop)\r\n");
-    printf("  sensor               - One-shot AS5600 read\r\n");
-    printf("  lcd clear            - Fill screen black\r\n");
-    printf("  lcd fill <color>     - red/green/blue/white/yellow/cyan/magenta\r\n");
-    printf("  lcd text <msg>       - Display text centred on screen\r\n");
-    printf("  lcd test             - Colour-bar test pattern\r\n");
-    printf("  help                 - Show this menu\r\n");
-    printf("  back                 - Return to main menu\r\n");
-    printf("=================\r\n\r\n");
-}
-
-static void PrintPIDMenu(void)
-{
-    printf("\r\n=== PID Mode ===\r\n");
-    printf("  home                  - Spin CCW until button, record home\r\n");
-    printf("  setl <cm>             - Set linear position target (cm)\r\n");
-    printf("  gains <kp> <ki> <kd>  - Update PID gains at runtime\r\n");
-    printf("  a                     - Print current position and setpoint\r\n");
-    printf("  pid                   - Enable PID tracking\r\n");
-    printf("  r                     - Enable PID + stream telemetry at 10 Hz\r\n");
-    printf("  s                     - Stop motor (freeze setpoint)\r\n");
-    printf("  m                     - Disable PID, motor stops\r\n");
-    printf("  help                  - Show this menu\r\n");
-    printf("  back                  - Return to main menu\r\n");
-    printf("================\r\n\r\n");
-}
 
 /* ── Motor primitives ────────────────────────────────────────────────────── */
 
@@ -283,27 +217,14 @@ static void MotorDrive(void)
     }
 }
 
-static void PrintPIDValues(void)
-{
-    printf("lin: %.4f m  err: %.4f rad  pid: %.0f  pwm: %.0f (%.1f%%)\r\n",
-           lin_pos, err, control_signal, actual_pwm,
-           (actual_pwm < 0.0f ? -actual_pwm : actual_pwm) / PID_ABS_MAX_OUTPUT * 100.0f);
-}
-
 /* ── Command processing ──────────────────────────────────────────────────── */
 
 static void ProcessMainMenu(char *cmd)
 {
     if (strncmp(cmd, "test", 4) == 0) {
         current_mode = MODE_TEST_IDLE;
-        PrintTestMenu();
     } else if (strncmp(cmd, "pid", 3) == 0) {
         current_mode = MODE_PID_IDLE;
-        PrintPIDMenu();
-    } else if (strncmp(cmd, "help", 4) == 0 || cmd[0] == '?') {
-        PrintMainMenu();
-    } else {
-        printf("Type 'test', 'pid', or 'help'\r\n");
     }
 }
 
@@ -316,14 +237,11 @@ static void ProcessTestMode(char *cmd)
             for (int i = 0; i < 5; i++)
                 if (selected_fingers & (1 << i))
                     HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_SET);
-            printf("Fingers ON\r\n");
         } else if (strncmp(cmd, "off", 3) == 0) {
             for (int i = 0; i < 5; i++)
                 if (selected_fingers & (1 << i))
                     HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
-            printf("Fingers OFF\r\n");
         } else {
-            printf("Type 'on' or 'off'\r\n");
             return;
         }
         current_mode = MODE_TEST_IDLE;
@@ -332,20 +250,15 @@ static void ProcessTestMode(char *cmd)
 
     if (strncmp(cmd, "cw", 2) == 0 && (cmd[2] == '\0' || cmd[2] == '\r')) {
         current_mode = MODE_TEST_CW;
-        printf("Motor CW — type 's' to stop\r\n");
     }
     else if (strncmp(cmd, "ccw", 3) == 0 && (cmd[3] == '\0' || cmd[3] == '\r')) {
         current_mode = MODE_TEST_CCW;
-        printf("Motor CCW — type 's' to stop\r\n");
     }
     else if (cmd[0] == 's' && (cmd[1] == '\0' || cmd[1] == '\r')) {
         MotorStop();
         if (current_mode == MODE_TEST_ACTUATE) {
             for (int i = 0; i < 5; i++)
                 HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
-            printf("Actuate stopped — all fingers OFF\r\n");
-        } else {
-            printf("Motor stopped\r\n");
         }
         current_mode = MODE_TEST_IDLE;
     }
@@ -353,15 +266,7 @@ static void ProcessTestMode(char *cmd)
         AS5600_Update();
         AS5600_Position_t pos;
         AS5600_GetPosition(&pos);
-        float raw_deg = (pos.absolute_ticks / 4096.0f) * 360.0f;
-        printf("AS5600: raw=%u  turns=%ld  abs_ticks=%lld  raw_angle=%.1f deg\r\n",
-               (unsigned)pos.raw_angle,
-               (long)pos.turns,
-               (long long)pos.absolute_ticks,
-               raw_deg);
-        printf("  homed: angle=%.4f rad  linear=%.4f m (%.2f cm)\r\n",
-               ang_curr, lin_pos, lin_pos * 100.0f);
-        AS5600_PrintMagnetStatus();
+        (void)pos;
     }
     else if (strncmp(cmd, "fingers", 7) == 0) {
         char *p = cmd + 7;
@@ -384,22 +289,14 @@ static void ProcessTestMode(char *cmd)
         }
 
         if (selected_fingers == 0) {
-            printf("No valid fingers (1-5). Usage: fingers 1 2 3 on\r\n");
+            /* no valid fingers */
         } else if (state == -1) {
-            printf("Selected fingers:");
-            for (int i = 0; i < 5; i++)
-                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
-            printf("\r\nTurn on or off? (on/off): ");
             current_mode = MODE_TEST_FINGER_ONOFF;
         } else {
             GPIO_PinState pin_state = (state == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET;
             for (int i = 0; i < 5; i++)
                 if (selected_fingers & (1 << i))
                     HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, pin_state);
-            printf("Fingers");
-            for (int i = 0; i < 5; i++)
-                if (selected_fingers & (1 << i)) printf(" %d", i + 1);
-            printf(" %s\r\n", (state == 1) ? "ON" : "OFF");
         }
     }
     else if (strncmp(cmd, "actuate", 7) == 0 && (cmd[7] == '\0' || cmd[7] == '\r')) {
@@ -407,12 +304,6 @@ static void ProcessTestMode(char *cmd)
         for (int i = 0; i < 5; i++)
             HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
         current_mode = MODE_TEST_ACTUATE;
-        printf("Actuate mode: press blue button to cycle (s to stop)\r\n");
-        printf("  0=all OFF  1-5=each finger  6=all ON\r\n");
-        printf("State 0: all OFF\r\n");
-    }
-    else if (strncmp(cmd, "help", 4) == 0 || cmd[0] == '?') {
-        PrintTestMenu();
     }
     else {
         /* Delegate to main.c for lcd commands */
@@ -428,56 +319,35 @@ static void ProcessPIDMode(char *cmd)
         MotorStop();
         integral = 0.0f;
         current_mode = MODE_PID_IDLE;
-        printf("PID disabled\r\n");
         return;
     }
 
     if (strncmp(cmd, "home", 4) == 0) {
-        printf("Homing: spinning CCW, press blue button...\r\n");
         MotorControl_Home();
-        printf("Homed at 0. Type 'pid' or 'r' to start tracking.\r\n");
     }
     else if (strncmp(cmd, "setl ", 5) == 0) {
         float cm = atof(&cmd[5]);
         ang_set = (cm / 100.0f) / PITCH_RADIUS;
-        printf("Setpoint: %.2f cm  (%.4f rad)\r\n", cm, ang_set);
     }
     else if (strncmp(cmd, "gains ", 6) == 0) {
         float kp, ki, kd;
         if (sscanf(&cmd[6], "%f %f %f", &kp, &ki, &kd) == 3) {
             Kp = kp; Ki = ki; Kd = kd;
-            printf("Gains: Kp=%.1f  Ki=%.1f  Kd=%.1f\r\n", Kp, Ki, Kd);
-        } else {
-            printf("Usage: gains <kp> <ki> <kd>\r\n");
         }
     }
     else if (cmd[0] == 'a' && (cmd[1] == '\0' || cmd[1] == '\r')) {
-        AS5600_PrintMagnetStatus();
-        printf("linear: %.4f m (%.2f cm)  setpoint: %.4f m (%.2f cm)\r\n",
-               lin_pos,                lin_pos                * 100.0f,
-               ang_set * PITCH_RADIUS, ang_set * PITCH_RADIUS * 100.0f);
-        printf("angle:  %.4f rad (%.1f deg)\r\n",
-               ang_curr, ang_curr * 180.0f / (float)M_PI);
+        /* position query — no serial output */
     }
     else if (strncmp(cmd, "pid", 3) == 0 && (cmd[3] == '\0' || cmd[3] == '\r')) {
         integral = 0.0f;
         current_mode = MODE_PID_ACTIVE;
-        printf("PID active — tracking setpoint (type 's' to stop, 'm' to disable)\r\n");
     }
     else if (cmd[0] == 'r' && (cmd[1] == '\0' || cmd[1] == '\r')) {
         integral = 0.0f;
         current_mode = MODE_PID_RECEIVE;
-        printf("PID active + streaming at 10 Hz (type 'm' to stop)\r\n");
     }
     else if (cmd[0] == 's' && (cmd[1] == '\0' || cmd[1] == '\r')) {
         current_mode = MODE_PID_STOP;
-        printf("Motor stopped (setpoint frozen)\r\n");
-    }
-    else if (strncmp(cmd, "help", 4) == 0 || cmd[0] == '?') {
-        PrintPIDMenu();
-    }
-    else {
-        printf("Unknown PID command (type 'help')\r\n");
     }
 }
 
@@ -488,7 +358,6 @@ static void ProcessCommand(char *cmd)
     if (strncmp(cmd, "back", 4) == 0) {
         MotorStop();
         current_mode = MODE_MAIN_MENU;
-        PrintMainMenu();
         return;
     }
 
@@ -516,7 +385,6 @@ void MotorControl_Init(void)
     MotorStop();
 
     HAL_UART_Receive_IT(&huart2, &rx_char, 1);
-    PrintMainMenu();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -549,15 +417,13 @@ void MotorControl_Process(void)
                     HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
 
                 if (actuate_state == 0) {
-                    printf("State 0: all OFF\r\n");
+                    /* all OFF */
                 } else if (actuate_state <= 5) {
                     HAL_GPIO_WritePin(fingers[actuate_state - 1].port,
                                      fingers[actuate_state - 1].pin, GPIO_PIN_SET);
-                    printf("State %d: finger %d ON\r\n", actuate_state, actuate_state);
                 } else {
                     for (int i = 0; i < 5; i++)
                         HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_SET);
-                    printf("State 6: all ON\r\n");
                 }
             }
         }
@@ -606,12 +472,9 @@ void MotorControl_Process(void)
                 break;
         }
 
-        /* Print telemetry at 10 Hz */
-        if (++print_div >= 10) {
+        /* Advance print_div even though we no longer stream telemetry */
+        if (++print_div >= 10)
             print_div = 0;
-            if (current_mode == MODE_PID_RECEIVE)
-                PrintPIDValues();
-        }
     }
 
     /* Switching test: toggle direction every MOTOR_SWITCH_INTERVAL_MS */
@@ -652,8 +515,6 @@ void MotorControl_TimerISR(void)
 /* -------------------------------------------------------------------------- */
 void MotorControl_UartISR(void)
 {
-    HAL_UART_Transmit(&huart2, &rx_char, 1, HAL_MAX_DELAY);
-
     if (rx_char == '\r' || rx_char == '\n') {
         if (rx_index > 0) {
             rx_buffer[rx_index] = '\0';
@@ -737,5 +598,4 @@ void MotorControl_PlaySong(void)
 __attribute__((weak)) void MotorControl_ExtCommand(const char *cmd)
 {
     (void)cmd;
-    printf("Unknown command (type 'help')\r\n");
 }
