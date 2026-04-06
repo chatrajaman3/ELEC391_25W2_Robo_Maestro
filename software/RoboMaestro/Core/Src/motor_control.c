@@ -10,6 +10,7 @@
 #include "motor_control.h"
 #include "as5600_position.h"
 #include "actuator.h"
+#include "stm32f4xx_hal_gpio.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -26,9 +27,9 @@ static int64_t home_offset = 0;       /* encoder ticks at home */
 static uint8_t  motor_active = 0;           /* hysteresis state: 1=driving, 0=stopped */
 static uint8_t  kickstart_remaining = 0;    /* ticks left in static-friction burst    */
 
-static float Kp = 2000.0f;
-static float Ki = 1000.0f;
-static float Kd = 500.0f;
+static float Kp = 500.0f;
+static float Ki = 100.0f;
+static float Kd = 100.0f;
 
 static float err            = 0.0f;
 static float integral       = 0.0f;
@@ -42,23 +43,46 @@ typedef enum { DIR_STOP, DIR_CW, DIR_CCW } MotorDir;
 static MotorDir current_dir = DIR_STOP;
 
 /* Song sequencer ----------------------------------------------------------- */
-typedef struct { float pos_cm; uint32_t dur_ms; } SongNote;
+typedef struct {
+    float    pos_cm;       /* carriage target position (cm)                  */
+    uint32_t dur_ms;       /* note duration — time before advancing to next  */
+    uint8_t  fingers;      /* bitmask: bit0=finger1 … bit4=finger5           */
+    uint32_t finger_dur_ms; /* ms the fingers stay pressed                   */
+} SongNote;
 
 static const SongNote song_notes[] = {
-    { 0.0f,  1000}, { 10.0f,  2000}, { 20.0f,  2000},
-    {30.0f,  2000}, {10.0f,  2000}, { 7.0f, 2000},
-    { 10.0f,  1000}, { 12.0f,  1000},
-    { 14.0f,  1000}, { 16.0f,  1000},
-    { 18.0f,  1000}, { 20.0f,  1000}, { 22.0f, 2000},
-    { 9.0f,  1000}, { 9.0f,  1000},
-    { 6.0f,  1000}, { 6.0f,  1000},
-    { 2.0f,  1000}, { 2.0f,  1000}, { 2.0f, 2000},
+    { 0.0f,  1000, 0x01, 500}, 
+    { 10.0f,  2000, 0x01, 500}, 
+    { 20.0f,  2000, 0x01, 500},
+    {30.0f,  2000, 0x01, 500}, 
+    {10.0f,  2000, 0x01, 500}, 
+    { 7.0f, 2000, 0x01, 500},
+    { 10.0f,  1000, 0x01, 500}, 
+    { 12.0f,  1000, 0x01, 500},
+    { 14.0f,  1000, 0x01, 500}, 
+    { 16.0f,  1000, 0x01, 500},
+    { 18.0f,  1000, 0x01, 500}, 
+    { 20.0f,  1000, 0x01, 500}, 
+    { 22.0f, 2000, 0x01, 500},
+    { 9.0f,  1000, 0x01, 500}, 
+    { 9.0f,  1000, 0x01, 500},
+    { 6.0f,  1000, 0x01, 500}, 
+    { 6.0f,  1000, 0x01, 500},
+    { 2.0f,  1000, 0x01, 500}, 
+    { 2.0f,  1000, 0x01, 500}, 
+    { 2.0f, 2000, 0x01, 1000},
 };
 #define SONG_NUM_NOTES  (sizeof(song_notes) / sizeof(song_notes[0]))
 
 static uint8_t  song_playing = 0;
 static uint32_t song_step    = 0;
 static uint32_t song_next_ms = 0;
+
+/* Per-note finger timing */
+static uint8_t  song_fingers_waiting  = 0;  /* waiting for motor to settle before pressing */
+static uint32_t song_finger_dur_saved = 0;  /* finger_dur_ms saved until motor settles     */
+static uint8_t  song_fingers_pressed  = 0;  /* fingers currently held down                 */
+static uint32_t song_finger_off_ms    = 0;  /* absolute tick to release fingers            */
 
 /* Switching test state */
 static MotorDir switch_dir     = DIR_CW;
@@ -496,12 +520,54 @@ void MotorControl_Process(void)
         if (now >= song_next_ms) {
             if (song_step >= SONG_NUM_NOTES) {
                 song_playing = 0;
+                song_fingers_waiting = 0;
+                /* Release any fingers still held at song end */
+                if (song_fingers_pressed) {
+                    for (int i = 0; i < 5; i++)
+                        HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
+                    song_fingers_pressed = 0;
+                }
+                MotorStop();
+                current_mode = MODE_PID_IDLE;
             } else {
-                float cm = song_notes[song_step].pos_cm;
-                ang_set      = (cm / 100.0f) / PITCH_RADIUS;
-                song_next_ms = now + song_notes[song_step].dur_ms;
+                const SongNote *n = &song_notes[song_step];
+                ang_set      = (n->pos_cm / 100.0f) / PITCH_RADIUS;
+                song_next_ms = now + n->dur_ms;
+
+                /* Release any fingers still held from the previous note */
+                if (song_fingers_pressed) {
+                    for (int i = 0; i < 5; i++)
+                        if (song_fingers_pressed & (1 << i))
+                            HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
+                    song_fingers_pressed = 0;
+                }
+                /* Arm fingers — will press once motor settles at new position */
+                song_fingers_waiting  = n->fingers;
+                song_finger_dur_saved = n->finger_dur_ms;
+
                 song_step++;
             }
+        } 
+
+        /* Press fingers once motor has settled at the target position.
+         * Use ang_set - ang_curr directly so a freshly-armed note never fires
+         * immediately due to stale err from the previous note's settled state. */
+        if (song_fingers_waiting && !song_fingers_pressed &&
+            fabsf(ang_set - ang_curr) < ERROR_THRESHOLD_OFF) {
+            for (int i = 0; i < 5; i++)
+                if (song_fingers_waiting & (1 << i))
+                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_SET);
+            song_fingers_pressed  = song_fingers_waiting;
+            song_fingers_waiting  = 0;
+            song_finger_off_ms    = now + song_finger_dur_saved;
+        }
+
+        /* Release fingers when finger_dur_ms has elapsed */
+        if (song_fingers_pressed && now >= song_finger_off_ms) {
+            for (int i = 0; i < 5; i++)
+                if (song_fingers_pressed & (1 << i))
+                    HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
+            song_fingers_pressed = 0;
         }
     }
 }
@@ -534,13 +600,14 @@ void MotorControl_UartISR(void)
 
 /* -------------------------------------------------------------------------- */
 void MotorControl_Home(void)
-{
-    MotorCCW(65535);
+{   
+    MotorCCW(8995);
     HAL_Delay(1000);
-    MotorCCW(25535);
+    MotorCCW(1000);
     while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
     HAL_Delay(20);
     MotorStop();
+    
 
     AS5600_Update();
     AS5600_Position_t home_pos;

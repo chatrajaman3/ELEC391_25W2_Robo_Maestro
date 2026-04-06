@@ -195,15 +195,11 @@ int main(void)
   menu_init();
 
   // Init solenoid fingers
-  Actuator_Init(5,
-    g_fingers[0], g_fingers[1], g_fingers[2],
-    g_fingers[3], g_fingers[4]);
+  Actuator_Init(5, g_fingers[0], g_fingers[1], g_fingers[2], g_fingers[3], g_fingers[4]);
 
-  // Init AS5600 encoder and motor control (UART CLI + PWM)
+  // Init AS5600 encoder and motor control 
   AS5600_Init();
   MotorControl_Init();
-
-  // MotorControl_Init() prints the full command menu over UART
 
   /* USER CODE END 2 */
 
