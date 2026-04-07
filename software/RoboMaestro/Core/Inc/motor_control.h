@@ -22,7 +22,7 @@ extern UART_HandleTypeDef huart2;
 /* ── Configuration macros ────────────────────────────────────────────────── */
 
 /* PID output limits (maps directly to TIM1 ARR = 65535, f_PWM = 2.75 kHz) */
-#define PID_ABS_MIN_OUTPUT  7000.0f  /* minimum duty when actively driving  */
+#define PID_ABS_MIN_OUTPUT  8000.0f  /* minimum duty when actively driving  */
 #define PID_ABS_MAX_OUTPUT  8998.0f  /* hard ceiling = ARR                  */
 /* Dead time inserted between direction changes to prevent H-bridge shoot-through.
  * Both channels are forced to 0 for this many ms before the new direction is applied. */
@@ -35,12 +35,12 @@ extern UART_HandleTypeDef huart2;
 /* Error dead-zone with hysteresis to prevent limit-cycle vibration.
  * Motor stops when error < THRESHOLD_OFF, stays stopped until error > THRESHOLD_ON. */
 #define ERROR_THRESHOLD_OFF  0.25f  /* rad — stop motor when inside this band  */
-#define ERROR_THRESHOLD_ON   0.40f  /* rad — restart motor when outside this   */
+#define ERROR_THRESHOLD_ON   0.60f  /* rad — restart motor when outside this   */
 
 /* Static-friction kickstart: apply max PWM for this many control ticks when
  * transitioning from stopped to moving, to overcome stiction.
  * At 100 Hz control rate, 5 ticks = 50 ms. */
-#define KICKSTART_TICKS      10
+#define KICKSTART_TICKS      5
 
 /* Gear-and-rack geometry */
 #define PITCH_RADIUS        0.019f  /* metres — 1.9 cm pitch radius */

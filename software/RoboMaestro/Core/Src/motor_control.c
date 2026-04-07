@@ -112,40 +112,40 @@ static const SongNote song0_notes[] = {
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song1_notes[] = {
-    { NOTE_F1,  500,  0x01, 300 },
-    { NOTE_F1,  500,  0x01, 300 },
-    { NOTE_C2,  500,  0x01, 300 },
-    { NOTE_C2,  500,  0x01, 300 },
-    { NOTE_D2,  500,  0x01, 300 },
-    { NOTE_D2,  500,  0x01, 300 },
-    { NOTE_C2,  1000, 0x01, 700 },
-    { NOTE_B1,  500,  0x01, 300 },
-    { NOTE_B1,  500,  0x01, 300 },
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_F1,  1000, 0x01, 700 },
+        { NOTE_C3,  3000,  0x00, 2000 }, // rest
+    { NOTE_C3,  500,  0x04, 200 }, // E3
+    { NOTE_C3,  500,  0x04, 200 }, // E3
+    { NOTE_C3,  500,  0x00, 300 }, // Rest
+    { NOTE_C3,  500,  0x04, 300 }, // E3
+    { NOTE_C3,  500,  0x00, 300 }, // Rest
+    { NOTE_C3,  1000,  0x01, 300 }, // C3
+    { NOTE_E3,  1000, 0x01, 300 }, // E3
+    { NOTE_C4,  1000,  0x10, 300 }, // G4
+    { NOTE_C3,  1000,  0x00, 300 }, // Rest
+    { NOTE_C3,  1000,  0x10,300 }, // G3
+    { NOTE_C3,  1000,  0x00, 300 }, // Rest
+    { NOTE_F3,  1000,  0x10, 300 }, // C4
+    { NOTE_C3,  500,  0x01, 300 }, // Rest
+    { NOTE_C3,  1000,  0x10, 300 }, // G3
+    { NOTE_E3,  500,  0x00, 300 }, // Rest
+    { NOTE_E3,  1000, 0x01, 500 }, // E3
+    {NOTE_D3, 500, 0x00, 300}, // Rest
+    {NOTE_D3, 1000, 0x10, 300}, // A3
+    {NOTE_E3, 1000, 0x10, 300}, // B3
+    {NOTE_E3, 500, 0x08, 300}, // Bb3
+    {NOTE_D3, 1000, 0x10, 300}, // A3
 };
 
 /* ── SONG 2 ──────────────────────────────────────────────────────────────────
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song2_notes[] = {
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_F1,  500,  0x01, 300 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_A1,  1000, 0x01, 700 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_G1,  500,  0x01, 300 },
-    { NOTE_G1,  1000, 0x01, 700 },
-    { NOTE_A1,  500,  0x01, 300 },
-    { NOTE_C2,  500,  0x01, 300 },
-    { NOTE_C2,  1000, 0x01, 700 },
-    { NOTE_F1,  2000, 0x01, 1000 },
+    { NOTE_A3,  1000,  0x04, 300 },
+    { NOTE_B3,  1000,  0x04, 300 },
+    { NOTE_A3,  1000,  0x01, 300 },
+    { NOTE_B3,  1000,  0x04, 300 },
+    { NOTE_B3,  1000,  0x08, 300 },
+
 };
 
 /* ── SONG 3 ──────────────────────────────────────────────────────────────────
@@ -574,20 +574,20 @@ void MotorControl_Process(void)
                 break;
 
             case MODE_TEST_CW:
-                MotorCW(65535);
+                MotorCW(8999);
                 ang_prev = ang_curr;
                 break;
 
             case MODE_TEST_CCW:
-                MotorCCW(65535);
+                MotorCCW(8999);
                 ang_prev = ang_curr;
                 break;
 
             case MODE_TEST_SWITCH:
                 if (switch_dir == DIR_CW)
-                    MotorCW(65535);
+                    MotorCW(8999);
                 else
-                    MotorCCW(65535);
+                    MotorCCW(8999);
                 ang_prev = ang_curr;
                 break;
 
@@ -617,7 +617,11 @@ void MotorControl_Process(void)
 
     /* Song sequencer: advance to the next note when the dwell time has elapsed */
     if (song_playing) {
-        uint32_t now = HAL_GetTick();
+        uint32_t now     = HAL_GetTick();
+        /* Set only when the step advance forcibly released held fingers this
+         * iteration — prevents the settling check from immediately re-pressing
+         * on the same call (double-press on repeated notes). */
+        uint8_t  just_released = 0;
         if (now >= song_next_ms) {
             if (song_step >= active_song_len) {
                 song_playing  = 0;
@@ -642,6 +646,7 @@ void MotorControl_Process(void)
                         if (song_fingers_pressed & (1 << i))
                             HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
                     song_fingers_pressed = 0;
+                    just_released = 1;  /* guard against same-tick re-press */
                 }
                 /* Arm fingers — will press once motor settles at new position */
                 song_fingers_waiting  = n->fingers;
@@ -649,12 +654,12 @@ void MotorControl_Process(void)
 
                 song_step++;
             }
-        } 
+        }
 
         /* Press fingers once motor has settled at the target position.
-         * Use ang_set - ang_curr directly so a freshly-armed note never fires
-         * immediately due to stale err from the previous note's settled state. */
-        if (song_fingers_waiting && !song_fingers_pressed &&
+         * Skip if we just released fingers this iteration so the solenoid has
+         * at least one loop iteration to physically move before being re-pressed. */
+        if (!just_released && song_fingers_waiting && !song_fingers_pressed &&
             fabsf(ang_set - ang_curr) < ERROR_THRESHOLD_OFF) {
             for (int i = 0; i < 5; i++)
                 if (song_fingers_waiting & (1 << i))
@@ -704,8 +709,8 @@ void MotorControl_UartISR(void)
 void MotorControl_Home(void)
 {   
     MotorCCW(8995);
-    HAL_Delay(1000);
-    MotorCCW(1000);
+    HAL_Delay(500);
+    MotorCCW(1200);
     while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
     HAL_Delay(20);
     MotorStop();

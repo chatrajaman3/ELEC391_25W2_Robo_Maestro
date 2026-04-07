@@ -376,7 +376,7 @@ void MotorControl_Process(void)
 
                 song_step++;
             }
-        }
+        } 
 
         /* Press fingers once motor has settled at the target position.
          * Use ang_set - ang_curr directly so a freshly-armed note never fires
@@ -410,12 +410,12 @@ void MotorControl_TimerISR(void)
 /* -------------------------------------------------------------------------- */
 void MotorControl_Home(void)
 {
-    MotorCCW(8999);
-    HAL_Delay(1000);
-    MotorCCW(4500);
-    while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
-    HAL_Delay(20);
-    MotorStop();
+    // MotorCCW(8999);
+    // HAL_Delay(1000);
+    // MotorCCW(4500);
+    // while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_RESET) {}
+    // HAL_Delay(20);
+    // MotorStop();
 
     AS5600_Update();
     AS5600_Position_t home_pos;
