@@ -55,6 +55,23 @@ extern UART_HandleTypeDef huart2;
 #define TAU                 0.05f
 #define BETAD               0.6065f
 
+/* ── Musical note enum ───────────────────────────────────────────────────────
+ * Use these names in song arrays instead of raw cm values.
+ * Actual positions are defined in note_positions_cm[] in motor_control.c —
+ * edit that table to calibrate each note to your instrument.
+ * ────────────────────────────────────────────────────────────────────────── */
+typedef enum {
+    /* Octave 1:  0 – 13.8 cm */
+    NOTE_F1 = 0, NOTE_G1, NOTE_A1, NOTE_B1, NOTE_C2, NOTE_D2, NOTE_E2,
+    /* Octave 2: 16 – 29.8 cm */
+    NOTE_F2,     NOTE_G2, NOTE_A2, NOTE_B2, NOTE_C3, NOTE_D3, NOTE_E3,
+    /* Octave 3: 32 – 45.8 cm */
+    NOTE_F3,     NOTE_G3, NOTE_A3, NOTE_B3, NOTE_C4, NOTE_D4, NOTE_E4,
+    /* Octave 4: 48 – 55.0 cm (up to B only) */
+    NOTE_F4,     NOTE_G4, NOTE_A4, NOTE_B4,
+    NOTE_COUNT   /* keep last — used as array size */
+} MusicalNote;
+
 /* ── Mode enum ───────────────────────────────────────────────────────────── */
 
 typedef enum {
@@ -106,7 +123,9 @@ UARTMode MotorControl_GetMode(void);
 void MotorControl_SetSetpoint(float rad);
 void MotorControl_SetLinSetpoint(float metres);
 void MotorControl_SetGains(float kp, float ki, float kd);
-void MotorControl_PlaySong(void);
+void MotorControl_PlaySong(int song_idx);
+void MotorControl_StopSong(void);
+uint8_t MotorControl_IsSongFinished(void);
 
 /* Open-loop test controls */
 void MotorControl_SetTestStop(void);

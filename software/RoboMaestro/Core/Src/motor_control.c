@@ -44,39 +44,140 @@ static MotorDir current_dir = DIR_STOP;
 
 /* Song sequencer ----------------------------------------------------------- */
 typedef struct {
-    float    pos_cm;       /* carriage target position (cm)                  */
-    uint32_t dur_ms;       /* note duration — time before advancing to next  */
-    uint8_t  fingers;      /* bitmask: bit0=finger1 … bit4=finger5           */
-    uint32_t finger_dur_ms; /* ms the fingers stay pressed                   */
+    MusicalNote note;           /* note name — looked up in note_positions_cm */
+    uint32_t    dur_ms;         /* time before advancing to the next note     */
+    uint8_t     fingers;        /* bitmask: bit0=finger1 … bit4=finger5       */
+    uint32_t    finger_dur_ms;  /* ms the fingers stay pressed                */
 } SongNote;
 
-static const SongNote song_notes[] = {
-    { 0.0f,  1000, 0x01, 500}, 
-    { 10.0f,  2000, 0x01, 500}, 
-    { 20.0f,  2000, 0x01, 500},
-    {30.0f,  2000, 0x01, 500}, 
-    {10.0f,  2000, 0x01, 500}, 
-    { 7.0f, 2000, 0x01, 500},
-    { 10.0f,  1000, 0x01, 500}, 
-    { 12.0f,  1000, 0x01, 500},
-    { 14.0f,  1000, 0x01, 500}, 
-    { 16.0f,  1000, 0x01, 500},
-    { 18.0f,  1000, 0x01, 500}, 
-    { 20.0f,  1000, 0x01, 500}, 
-    { 22.0f, 2000, 0x01, 500},
-    { 9.0f,  1000, 0x01, 500}, 
-    { 9.0f,  1000, 0x01, 500},
-    { 6.0f,  1000, 0x01, 500}, 
-    { 6.0f,  1000, 0x01, 500},
-    { 2.0f,  1000, 0x01, 500}, 
-    { 2.0f,  1000, 0x01, 500}, 
-    { 2.0f, 2000, 0x01, 1000},
+/* ── NOTE POSITION TABLE ────────────────────────────────────────────────────
+ * One value per white key, in enum order (C1, D1, E1, F1, G1, A1, B1, C2 …).
+ * Edit these cm values to match your instrument's physical fret positions.
+ * ────────────────────────────────────────────────────────────────────────── */
+static const float note_positions_cm[NOTE_COUNT] = {
+    /* Octave 1 (base positions from image) */
+     0.0f,   /* F1 */
+     2.2f,   /* G1 */
+     4.6f,   /* A1 */
+     7.0f,   /* B1 */
+     9.3f,   /* C2 */
+    11.5f,   /* D2 */
+    13.8f,   /* E2 */
+    /* Octave 2 (+16 cm) */
+    16.0f,   /* F2 */
+    18.2f,   /* G2 */
+    20.6f,   /* A2 */
+    23.0f,   /* B2 */
+    25.3f,   /* C3 */
+    27.5f,   /* D3 */
+    29.8f,   /* E3 */
+    /* Octave 3 (+32 cm) */
+    32.0f,   /* F3 */
+    34.2f,   /* G3 */
+    36.6f,   /* A3 */
+    39.0f,   /* B3 */
+    41.3f,   /* C4 */
+    43.5f,   /* D4 */
+    45.8f,   /* E4 */
+    /* Octave 4 (+48 cm, up to B) */
+    48.0f,   /* F4 */
+    50.2f,   /* G4 */
+    52.6f,   /* A4 */
+    55.0f,   /* B4 */
 };
-#define SONG_NUM_NOTES  (sizeof(song_notes) / sizeof(song_notes[0]))
 
-static uint8_t  song_playing = 0;
-static uint32_t song_step    = 0;
-static uint32_t song_next_ms = 0;
+/* ── SONG 0 (test song — played by the SONG button on the Test screen) ─────
+ * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
+ * ────────────────────────────────────────────────────────────────────────── */
+static const SongNote song0_notes[] = {
+    { NOTE_F1, 1000, 0x01, 500  },
+    { NOTE_C2, 2000, 0x01, 500  },
+    { NOTE_A2, 2000, 0x01, 500  },
+    { NOTE_F3, 2000, 0x01, 500  },
+    { NOTE_C2, 2000, 0x01, 500  },
+    { NOTE_B1, 2000, 0x01, 500  },
+    { NOTE_C2, 1000, 0x01, 500  },
+    { NOTE_D2, 1000, 0x01, 500  },
+    { NOTE_E2, 1000, 0x01, 500  },
+    { NOTE_F2, 1000, 0x01, 500  },
+    { NOTE_G2, 2000, 0x01, 500  },
+    { NOTE_D2, 1000, 0x01, 500  },
+    { NOTE_B1, 1000, 0x01, 500  },
+    { NOTE_A1, 1000, 0x01, 500  },
+    { NOTE_G1, 1000, 0x01, 500  },
+    { NOTE_F1, 2000, 0x01, 1000 },
+};
+
+/* ── SONG 1 ──────────────────────────────────────────────────────────────────
+ * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
+ * ────────────────────────────────────────────────────────────────────────── */
+static const SongNote song1_notes[] = {
+    { NOTE_F1,  500,  0x01, 300 },
+    { NOTE_F1,  500,  0x01, 300 },
+    { NOTE_C2,  500,  0x01, 300 },
+    { NOTE_C2,  500,  0x01, 300 },
+    { NOTE_D2,  500,  0x01, 300 },
+    { NOTE_D2,  500,  0x01, 300 },
+    { NOTE_C2,  1000, 0x01, 700 },
+    { NOTE_B1,  500,  0x01, 300 },
+    { NOTE_B1,  500,  0x01, 300 },
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_F1,  1000, 0x01, 700 },
+};
+
+/* ── SONG 2 ──────────────────────────────────────────────────────────────────
+ * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
+ * ────────────────────────────────────────────────────────────────────────── */
+static const SongNote song2_notes[] = {
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_F1,  500,  0x01, 300 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_A1,  1000, 0x01, 700 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_G1,  500,  0x01, 300 },
+    { NOTE_G1,  1000, 0x01, 700 },
+    { NOTE_A1,  500,  0x01, 300 },
+    { NOTE_C2,  500,  0x01, 300 },
+    { NOTE_C2,  1000, 0x01, 700 },
+    { NOTE_F1,  2000, 0x01, 1000 },
+};
+
+/* ── SONG 3 ──────────────────────────────────────────────────────────────────
+ * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
+ * ────────────────────────────────────────────────────────────────────────── */
+static const SongNote song3_notes[] = {
+    { NOTE_F1,  500,  0x01, 300 },
+    { NOTE_A1,  500,  0x02, 300 },
+    { NOTE_C2,  500,  0x04, 300 },
+    { NOTE_F2,  500,  0x08, 300 },
+    { NOTE_A2,  500,  0x10, 300 },
+    { NOTE_F2,  500,  0x08, 300 },
+    { NOTE_C2,  500,  0x04, 300 },
+    { NOTE_A1,  500,  0x02, 300 },
+    { NOTE_F1,  2000, 0x01, 1000 },
+};
+
+static const SongNote * const songs[4] = { song0_notes, song1_notes, song2_notes, song3_notes };
+static const uint32_t song_lengths[4]  = {
+    sizeof(song0_notes) / sizeof(song0_notes[0]),
+    sizeof(song1_notes) / sizeof(song1_notes[0]),
+    sizeof(song2_notes) / sizeof(song2_notes[0]),
+    sizeof(song3_notes) / sizeof(song3_notes[0]),
+};
+
+static const SongNote *active_song     = song0_notes;
+static uint32_t        active_song_len = sizeof(song0_notes) / sizeof(song0_notes[0]);
+
+static uint8_t  song_playing  = 0;
+static uint8_t  song_finished = 0;   /* set to 1 when playback ends, cleared by getter */
+static uint32_t song_step     = 0;
+static uint32_t song_next_ms  = 0;
 
 /* Per-note finger timing */
 static uint8_t  song_fingers_waiting  = 0;  /* waiting for motor to settle before pressing */
@@ -518,8 +619,9 @@ void MotorControl_Process(void)
     if (song_playing) {
         uint32_t now = HAL_GetTick();
         if (now >= song_next_ms) {
-            if (song_step >= SONG_NUM_NOTES) {
-                song_playing = 0;
+            if (song_step >= active_song_len) {
+                song_playing  = 0;
+                song_finished = 1;
                 song_fingers_waiting = 0;
                 /* Release any fingers still held at song end */
                 if (song_fingers_pressed) {
@@ -530,8 +632,8 @@ void MotorControl_Process(void)
                 MotorStop();
                 current_mode = MODE_PID_IDLE;
             } else {
-                const SongNote *n = &song_notes[song_step];
-                ang_set      = (n->pos_cm / 100.0f) / PITCH_RADIUS;
+                const SongNote *n = &active_song[song_step];
+                ang_set      = (note_positions_cm[n->note] / 100.0f) / PITCH_RADIUS;
                 song_next_ms = now + n->dur_ms;
 
                 /* Release any fingers still held from the previous note */
@@ -652,13 +754,39 @@ void MotorControl_SetTestSwitch(void)
     MotorCW(65535);   /* start immediately without waiting for first tick */
 }
 
-void MotorControl_PlaySong(void)
+void MotorControl_PlaySong(int song_idx)
 {
-    song_step    = 0;
-    song_next_ms = HAL_GetTick();
-    song_playing = 1;
-    integral     = 0.0f;
-    current_mode = MODE_PID_ACTIVE;
+    if (song_idx < 0 || song_idx > 3) song_idx = 0;
+    active_song     = songs[song_idx];
+    active_song_len = song_lengths[song_idx];
+    song_step       = 0;
+    song_next_ms    = HAL_GetTick();
+    song_playing    = 1;
+    song_finished   = 0;
+    integral        = 0.0f;
+    current_mode    = MODE_PID_ACTIVE;
+}
+
+void MotorControl_StopSong(void)
+{
+    song_playing         = 0;
+    song_fingers_waiting = 0;
+    if (song_fingers_pressed) {
+        for (int i = 0; i < 5; i++)
+            HAL_GPIO_WritePin(fingers[i].port, fingers[i].pin, GPIO_PIN_RESET);
+        song_fingers_pressed = 0;
+    }
+    MotorStop();
+    current_mode = MODE_PID_IDLE;
+}
+
+uint8_t MotorControl_IsSongFinished(void)
+{
+    if (song_finished) {
+        song_finished = 0;
+        return 1;
+    }
+    return 0;
 }
 
 /* -------------------------------------------------------------------------- */

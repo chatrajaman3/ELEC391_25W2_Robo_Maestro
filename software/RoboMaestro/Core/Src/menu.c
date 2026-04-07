@@ -22,6 +22,8 @@ static void cb_save_settings(void);
 static void cb_select_song_0(void);
 static void cb_select_song_1(void);
 static void cb_select_song_2(void);
+static void cb_select_song_3(void);
+
 
 /* Test screen */
 static void cb_finger_1(void);
@@ -57,9 +59,9 @@ static MenuItem main_items[] = {
 /* ── Song select screen ──────────────────────────────────────────────────── */
 static MenuItem song_select_items[] = {
     /*  x    y    w    h   label     sc  normal       pressed           target          callback           */
-    {  10,  48, 220,  52, "SONG 1",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_0   },
-    {  10, 108, 220,  52, "SONG 2",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_1   },
-    {  10, 168, 220,  52, "SONG 3",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_2   },
+    {  10,  48, 220,  52, "SONG 1",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_1   },
+    {  10, 108, 220,  52, "SONG 2",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_2   },
+    {  10, 168, 220,  52, "SONG 3",   2, COL_BLUE,    COL_BLUE_PRESS,  SCREEN_NONE,    cb_select_song_3   },
     {  10, 240, 105,  52, "BACK",     2, COL_RED,     COL_RED_PRESS,   SCREEN_NONE,    menu_navigate_back },
     { 125, 240, 105,  52, "PLAY",     2, COL_GREEN,   COL_GREEN_PRESS, SCREEN_PLAYING, cb_start_playing   },
 };
@@ -326,7 +328,7 @@ void menu_draw_playing(void)
     }
     else {
         char song_label[16];
-        snprintf(song_label, sizeof(song_label), "SONG %d", _selected_song + 1);
+        snprintf(song_label, sizeof(song_label), "SONG %d", _selected_song);
         ili9341_draw_string(20, 55, song_label);
     }
 
@@ -367,6 +369,14 @@ void menu_update(void)
     if (mode == MODE_PID_ACTIVE || mode == MODE_PID_RECEIVE)
         return;
 
+    /* Detect song completion and update status text in-place */
+    if (_cur_screen == SCREEN_PLAYING && MotorControl_IsSongFinished()) {
+        ili9341_fill_rect(20, 78, 120, 10, COL_BLACK);
+        ili9341_set_font_scale(1);
+        ili9341_set_text_color(COL_GREEN, COL_BLACK);
+        ili9341_draw_string(20, 80, "Done!");
+    }
+
     /* 1. Read touch */
     TouchPoint tp = {0};
     xpt2046_read(&tp);
@@ -387,14 +397,15 @@ void menu_update(void)
 
 static void cb_start_playing(void)
 {
-    if (_selected_song == -1) {
+    if (_selected_song == -1)
         return;
-    }
+    MotorControl_Home();
+    MotorControl_PlaySong(_selected_song);
 }
 
 static void cb_stop_playing(void)
 {
-    /* TODO: stop motor / playback sequence */
+    MotorControl_StopSong();
     menu_navigate_back();
 }
 
@@ -403,20 +414,20 @@ static void cb_save_settings(void)
     /* TODO: persist settings to SD card or flash */
 }
 
-static void cb_select_song_0(void) {
-    _selected_song = 0;
-    for (int i = 0; i < 3; i++)   /* redraw only the 3 song buttons */
-        menu_draw_item(&song_select_items[i], i == _selected_song);
-}
 static void cb_select_song_1(void) {
     _selected_song = 1;
-    for (int i = 0; i < 3; i++)
-        menu_draw_item(&song_select_items[i], i == _selected_song);
+    for (int i = 0; i < 3; i++)   /* highlight button at index 0,1,2 for song 1,2,3 */
+        menu_draw_item(&song_select_items[i], i == (_selected_song - 1));
 }
 static void cb_select_song_2(void) {
     _selected_song = 2;
     for (int i = 0; i < 3; i++)
-        menu_draw_item(&song_select_items[i], i == _selected_song);
+        menu_draw_item(&song_select_items[i], i == (_selected_song - 1));
+}
+static void cb_select_song_3(void) {
+    _selected_song = 3;
+    for (int i = 0; i < 3; i++)
+        menu_draw_item(&song_select_items[i], i == (_selected_song - 1));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -509,6 +520,6 @@ static void cb_enc_pos(void)
     ili9341_draw_string(10, 237, _enc_text);
 }
 
-static void cb_motor_home(void) { MotorControl_Home(); }
+static void cb_motor_home(void) {MotorControl_Home(); }
 
-static void cb_song_test(void)  { MotorControl_Home(); MotorControl_PlaySong(); }
+static void cb_song_test(void)  { MotorControl_Home(); MotorControl_PlaySong(0); }
