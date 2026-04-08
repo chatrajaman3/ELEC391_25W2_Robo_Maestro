@@ -27,9 +27,9 @@ static int64_t home_offset = 0;       /* encoder ticks at home */
 static uint8_t  motor_active = 0;           /* hysteresis state: 1=driving, 0=stopped */
 static uint8_t  kickstart_remaining = 0;    /* ticks left in static-friction burst    */
 
-static float Kp = 500.0f;
-static float Ki = 100.0f;
-static float Kd = 100.0f;
+static float Kp = 200.0f;
+static float Ki = 10.0f;
+static float Kd = 20.0f;
 
 static float err            = 0.0f;
 static float integral       = 0.0f;
@@ -55,112 +55,192 @@ typedef struct {
  * Edit these cm values to match your instrument's physical fret positions.
  * ────────────────────────────────────────────────────────────────────────── */
 static const float note_positions_cm[NOTE_COUNT] = {
-    /* Octave 1 (base positions from image) */
+    /* Octave 1 (base positions from F) */
      0.0f,   /* F1 */
-     2.2f,   /* G1 */
-     4.6f,   /* A1 */
-     7.0f,   /* B1 */
-     9.3f,   /* C2 */
-    11.5f,   /* D2 */
-    13.8f,   /* E2 */
+     2.6f,   /* G1 */
+     4.9f,   /* A1 */
+     7.2f,   /* B1 */
+     9.6f,   /* C2 */
+    11.6f,   /* D2 */
+    14.2f,   /* E2 */
     /* Octave 2 (+16 cm) */
-    16.0f,   /* F2 */
-    18.2f,   /* G2 */
-    20.6f,   /* A2 */
-    23.0f,   /* B2 */
-    25.3f,   /* C3 */
-    27.5f,   /* D3 */
-    29.8f,   /* E3 */
+    16.5f,   /* F2 */   
+    18.7f,   /* G2 */
+    22.7f,   /* A2 */
+    25.0f,   /* B2 */
+    26.4f,   /* C3 */
+    28.2f,   /* D3 */
+    28.5f,   /* E3 */
     /* Octave 3 (+32 cm) */
-    32.0f,   /* F3 */
-    34.2f,   /* G3 */
-    36.6f,   /* A3 */
-    39.0f,   /* B3 */
-    41.3f,   /* C4 */
-    43.5f,   /* D4 */
-    45.8f,   /* E4 */
+    30.8f,   /* F3 */
+    33.1f,   /* G3 */
+    35.4f,   /* A3 */
+    37.7f,   /* B3 */
+    40.0f,   /* C4 */
+    42.3f,   /* D4 */
+    44.6f,   /* E4 */
     /* Octave 4 (+48 cm, up to B) */
-    48.0f,   /* F4 */
-    50.2f,   /* G4 */
-    52.6f,   /* A4 */
-    55.0f,   /* B4 */
+    46.9f,   /* F4 */
+    49.2f,   /* G4 */
+    51.5f,   /* A4 */
+    53.8f,   /* B4 */
 };
 
 /* ── SONG 0 (test song — played by the SONG button on the Test screen) ─────
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song0_notes[] = {
-    { NOTE_F1, 1000, 0x01, 500  },
-    { NOTE_C2, 2000, 0x01, 500  },
-    { NOTE_A2, 2000, 0x01, 500  },
-    { NOTE_F3, 2000, 0x01, 500  },
-    { NOTE_C2, 2000, 0x01, 500  },
-    { NOTE_B1, 2000, 0x01, 500  },
-    { NOTE_C2, 1000, 0x01, 500  },
-    { NOTE_D2, 1000, 0x01, 500  },
-    { NOTE_E2, 1000, 0x01, 500  },
-    { NOTE_F2, 1000, 0x01, 500  },
-    { NOTE_G2, 2000, 0x01, 500  },
-    { NOTE_D2, 1000, 0x01, 500  },
-    { NOTE_B1, 1000, 0x01, 500  },
-    { NOTE_A1, 1000, 0x01, 500  },
-    { NOTE_G1, 1000, 0x01, 500  },
-    { NOTE_F1, 2000, 0x01, 1000 },
+    /* ascending scale — every note, finger 1 */
+    { NOTE_F1, 800, 0x01, 400 },
+    { NOTE_G1, 800, 0x01, 400 },
+    { NOTE_A1, 800, 0x01, 400 },
+    { NOTE_B1, 800, 0x01, 400 },
+    { NOTE_C2, 800, 0x01, 400 },
+    { NOTE_D2, 800, 0x01, 400 },
+    { NOTE_E2, 800, 0x01, 400 },
+    { NOTE_F2, 800, 0x01, 400 },
+    { NOTE_G2, 800, 0x01, 400 },
+    { NOTE_A2, 800, 0x01, 400 },
+    { NOTE_B2, 800, 0x01, 400 },
+    { NOTE_C3, 800, 0x01, 400 },
+    { NOTE_D3, 800, 0x01, 400 },
+    { NOTE_E3, 1600, 0x01, 400 },
+    { NOTE_F3, 800, 0x01, 400 },
+    { NOTE_G3, 800, 0x01, 400 },
+    { NOTE_A3, 800, 0x01, 400 },
+    { NOTE_B3, 800, 0x01, 400 },
+    { NOTE_C4, 800, 0x01, 400 },
+    { NOTE_D4, 800, 0x01, 400 },
+    { NOTE_E4, 800, 0x01, 400 },
+    { NOTE_F4, 800, 0x01, 400 },
+    {NOTE_A2, 3000, 0x00, 1000},
 };
 
 /* ── SONG 1 ──────────────────────────────────────────────────────────────────
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song1_notes[] = {
-        { NOTE_C3,  3000,  0x00, 2000 }, // rest
-    { NOTE_C3,  500,  0x04, 200 }, // E3
-    { NOTE_C3,  500,  0x04, 200 }, // E3
-    { NOTE_C3,  500,  0x00, 300 }, // Rest
-    { NOTE_C3,  500,  0x04, 300 }, // E3
-    { NOTE_C3,  500,  0x00, 300 }, // Rest
-    { NOTE_C3,  1000,  0x01, 300 }, // C3
-    { NOTE_E3,  1000, 0x01, 300 }, // E3
-    { NOTE_C4,  1000,  0x10, 300 }, // G4
-    { NOTE_C3,  1000,  0x00, 300 }, // Rest
-    { NOTE_C3,  1000,  0x10,300 }, // G3
-    { NOTE_C3,  1000,  0x00, 300 }, // Rest
-    { NOTE_F3,  1000,  0x10, 300 }, // C4
-    { NOTE_C3,  500,  0x01, 300 }, // Rest
-    { NOTE_C3,  1000,  0x10, 300 }, // G3
-    { NOTE_E3,  500,  0x00, 300 }, // Rest
-    { NOTE_E3,  1000, 0x01, 500 }, // E3
-    {NOTE_D3, 500, 0x00, 300}, // Rest
-    {NOTE_D3, 1000, 0x10, 300}, // A3
-    {NOTE_E3, 1000, 0x10, 300}, // B3
-    {NOTE_E3, 500, 0x08, 300}, // Bb3
-    {NOTE_D3, 1000, 0x10, 300}, // A3
+    {NOTE_E2, 3000, 0x00, 1000},
+    {NOTE_E2, 1000, 0x01, 500},
+    {NOTE_D2, 1000, 0x01, 500},
+    {NOTE_C2, 2000, 0x01, 1000},
+    {NOTE_E2, 1000, 0x01, 500},
+    {NOTE_D2, 1000, 0x01, 500},
+    {NOTE_C2, 2000, 0x01, 1000},
+    {NOTE_C2, 500, 0x01, 100},
+    {NOTE_C2, 500, 0x01, 100},
+    {NOTE_C2, 500, 0x01, 100},
+    {NOTE_C2, 500, 0x01, 100},
+    {NOTE_D2, 500, 0x01, 100},
+    {NOTE_D2, 500, 0x01, 100},
+    {NOTE_D2, 500, 0x01, 100},
+    {NOTE_D2, 500, 0x01, 100},
+    {NOTE_E2, 1000, 0x01, 500},
+    {NOTE_D2, 1000, 0x01, 500},
+    {NOTE_C2, 2000, 0x01, 1000},
+    {NOTE_A1, 3000, 0x00, 1000},
 };
 
 /* ── SONG 2 ──────────────────────────────────────────────────────────────────
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song2_notes[] = {
-    { NOTE_A3,  1000,  0x04, 300 },
-    { NOTE_B3,  1000,  0x04, 300 },
-    { NOTE_A3,  1000,  0x01, 300 },
-    { NOTE_B3,  1000,  0x04, 300 },
-    { NOTE_B3,  1000,  0x08, 300 },
+    {NOTE_F2, 2000, 0x00, 750},
 
+    {NOTE_F2, 1500, 0x10, 750},
+    {NOTE_E2, 500, 0x10, 150},
+    {NOTE_F2, 1000, 0x04, 500},
+    {NOTE_E2, 1000, 0x04, 500},
+    {NOTE_F2, 1500, 0x01, 750},
+    {NOTE_G2, 500, 0x01, 150},
+    {NOTE_F2, 1000, 0x04, 500},
+    {NOTE_F2, 1000, 0x10, 500},
+    {NOTE_E2, 1500, 0x10, 750},
+    {NOTE_F2, 500, 0x04, 150},
+    {NOTE_E2, 1000, 0x04, 500},
+    {NOTE_F2, 1000, 0x01, 500},
+    {NOTE_E2, 4000, 0x01, 3000},
+    {NOTE_D2, 1500, 0x10, 750},
+    {NOTE_E2, 500, 0x04, 150},
+    {NOTE_D2, 1000, 0x04, 500},
+    {NOTE_E2, 1000, 0x01, 500},
+    {NOTE_D2, 1500, 0x01,750},
+    {NOTE_E2, 500, 0x04, 150},
+    {NOTE_D2, 1000, 0x04, 500},
+    {NOTE_D2, 1000, 0x10, 500},
+    {NOTE_D2, 1500, 0x08, 750},
+    {NOTE_D2, 1000, 0x04, 500},
+    {NOTE_E2, 1000, 0x01, 500},
+    {NOTE_D2, 1000, 0x01,500},
+    {NOTE_C2, 2000, 0x01, 1000},
+    {NOTE_A1, 3000, 0x00, 1000},
 };
 
 /* ── SONG 3 ──────────────────────────────────────────────────────────────────
  * Format: { NOTE_XX, dur_ms, finger_mask, finger_dur_ms }
  * ────────────────────────────────────────────────────────────────────────── */
 static const SongNote song3_notes[] = {
-    { NOTE_F1,  500,  0x01, 300 },
-    { NOTE_A1,  500,  0x02, 300 },
-    { NOTE_C2,  500,  0x04, 300 },
-    { NOTE_F2,  500,  0x08, 300 },
-    { NOTE_A2,  500,  0x10, 300 },
-    { NOTE_F2,  500,  0x08, 300 },
-    { NOTE_C2,  500,  0x04, 300 },
-    { NOTE_A1,  500,  0x02, 300 },
-    { NOTE_F1,  2000, 0x01, 1000 },
+// 1st Line
+    // 1st Line
+    { NOTE_C2,  700,  0x00, 150 },
+    { NOTE_C2,  700,  0x01, 150 },      // C
+    { NOTE_C2,  700,  0x02, 150 },      // C#
+    { NOTE_D2,  700,  0x01, 150 },      // D
+    { NOTE_D2,  700,  0x02, 150 },      // D#
+    { NOTE_E2,  1200,  0x01, 300 },     // E
+    { NOTE_E2,  700,  0x01, 150 },      // E
+    { NOTE_F2,  700,  0x01, 150 },      // F
+    { NOTE_F2,  700,  0x02, 150 },      // F#
+    { NOTE_G2,  700,  0x01, 150 },      // G
+    { NOTE_G2,  1200,  0x02, 300 },     // G#
+    { NOTE_G2,  700,  0x01, 150 },      // G
+    { NOTE_G2,  1200,  0x02, 300 },     // G#
+    { NOTE_G2,  700,  0x01, 150 },      // G
+    { NOTE_G2,  700,  0x02, 150 },      // G#
+    { NOTE_G2,  700,  0x02, 150 },      // G#
+    { NOTE_G2,  700,  0x01, 150 },      // G
+    { NOTE_B1,  1200,  0x15, 300 },     // BDF
+
+    { NOTE_A1,  700,  0x10, 150 },      // E
+    { NOTE_A1,  700,  0x08, 150 },      // D#
+    { NOTE_A1,  700,  0x10, 150 },      // E
+    { NOTE_C2,  1200,  0x10, 300 },     // G
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  700,  0x01, 150 },      // E
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  1200,  0x04, 300 },     // G
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  700,  0x01, 150 },      // E
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  1200,  0x04, 300 },     // G
+    { NOTE_E2,  700,  0x01, 150 },      // E
+    { NOTE_E2,  700,  0x04, 150 },      // G
+    { NOTE_F2,  700,  0x04, 150 },      // A
+    { NOTE_C2,  1200,  0x15, 300 },     // G
+
+    { NOTE_A1,  700,  0x10, 150 },      // E
+    { NOTE_A1,  700,  0x08, 150 },      // D#
+    { NOTE_A1,  700,  0x10, 150 },      // E
+    { NOTE_C2,  1200,  0x10, 300 },     // G
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  700,  0x01, 150 },      // E
+    { NOTE_D2,  700,  0x04, 150 },      // F
+    { NOTE_E2,  1200,  0x04, 300 },     // G
+
+    { NOTE_C2,  700,  0x10, 150 },     // G
+    { NOTE_C2,  700,  0x08, 150 },     // F#
+    { NOTE_C2,  700,  0x10, 150 },     // G
+    { NOTE_D2,  700,  0x08, 150 },     // G#
+    { NOTE_D2,  700,  0x10, 150 },     // A
+    { NOTE_E2,  700,  0x08, 150 },     // A#
+    { NOTE_E2,  700,  0x10, 150 },     // B
+    { NOTE_F2,  1200,  0x10, 300 },    // C
+
+    { NOTE_C2,  1500,  0x15, 400 },    // CEG
+    { NOTE_F2,  700,  0x15, 150 },     // FAC
+    { NOTE_G2,  700,  0x15, 150 },     // GBD
+    { NOTE_C2,  2000,  0x15, 600 },    // CEG
+    {NOTE_A1, 3000, 0x00, 1000},
 };
 
 static const SongNote * const songs[4] = { song0_notes, song1_notes, song2_notes, song3_notes };
